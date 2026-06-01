@@ -1,0 +1,60 @@
+[project]
+name = "agentic-orchestrator"
+version = "0.0.1"
+description = "Autonomous multi-agent orchestrator that reliably builds projects. See orchestrator-v2-planning/."
+requires-python = ">=3.11"
+
+# ── Lint gate (ruff E,F) — same rule-set discipline as the planning charter ──
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F"]
+ignore = ["E402", "E501", "E701", "E702", "E741"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+
+# ── Soft god-file guardrail (charter L3 — warn + review trigger, never blocking) ──
+[tool.agentic]
+loc_soft_limit = 800
+
+# ── Import-linter contracts: the inward dependency arrow + the self-mod quarantine ──
+[tool.importlinter]
+root_packages = [
+  "core", "infra", "registry", "memory", "agents", "pa",
+  "validation", "dispatch", "scheduling", "control", "edge", "selfdev",
+]
+
+[[tool.importlinter.contracts]]
+name = "L2 — inward-only layered dependencies"
+type = "layers"
+layers = [
+  "edge",
+  "control",
+  "dispatch | scheduling | validation",
+  "pa",
+  "agents",
+  "memory",
+  "infra",
+  "core",
+]
+
+[[tool.importlinter.contracts]]
+name = "registry is a leaf (imports nothing internal)"
+type = "forbidden"
+source_modules = ["registry"]
+forbidden_modules = [
+  "core", "infra", "memory", "agents", "pa", "validation",
+  "dispatch", "scheduling", "control", "edge", "selfdev",
+]
+
+[[tool.importlinter.contracts]]
+name = "L9 — self-modification is quarantined (off the critical path)"
+type = "forbidden"
+source_modules = [
+  "core", "infra", "registry", "memory", "agents", "pa",
+  "validation", "dispatch", "scheduling", "control", "edge",
+]
+forbidden_modules = ["selfdev"]

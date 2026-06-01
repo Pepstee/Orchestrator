@@ -1,0 +1,13 @@
+# built projects live here, kept pristine by law L4 — never in version control
+projects/
+# runtime state / logs
+state/
+journal/
+evals/runs/
+# python
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+.venv/

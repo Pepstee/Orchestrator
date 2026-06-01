@@ -1,0 +1,56 @@
+"""charter.laws — the laws as DATA, each linked to its enforcing check (the prime directive).
+
+"A law without a machine-check is a wish." Active laws MUST name a check; the meta-check
+test_every_law_has_a_check fails the build if an active law has none. Laws whose subsystem
+isn't built yet are 'deferred' with a written reason — keeping the gap explicit and traceable
+(the law-intake rule: a new active law ships with its check in the same change).
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class Law:
+    id: str
+    name: str
+    status: str          # "active" (check required+present) | "deferred" (subsystem pending)
+    check: str | None    # name of the enforcing test or import-linter contract
+    note: str = ""
+
+
+LAWS: list[Law] = [
+    Law("L1", "Single source of truth", "active",
+        "tests/architecture/test_single_definition.py + test_registry_single_source.py"),
+    Law("L2", "Inward-only layered dependencies", "active",
+        "import-linter: L2 — inward-only layered dependencies"),
+    Law("L3", "Module-size soft guardrail (warn + review @700-800 LOC)", "active",
+        "tests/architecture/test_loc_soft_guardrail.py"),
+    Law("L5", "No arbitrary model choice (registry is canonical)", "active",
+        "tests/architecture/test_registry_single_source.py"),
+    Law("L9", "Self-modification quarantined", "active",
+        "import-linter: L9 — self-modification is quarantined"),
+    Law("L11", "Total state machine", "active",
+        "tests/architecture/test_state_machine_total.py"),
+    Law("PRIME", "Every active law has a machine-check", "active",
+        "tests/architecture/test_every_law_has_a_check.py"),
+
+    # Deferred — subsystem not built yet; check planned (gap kept explicit and traceable).
+    Law("L4", "Deliverable purity (project tree has no orchestrator scratch)", "deferred",
+        None, "check lands with the build/dispatch pipeline"),
+    Law("L6", "Bounded autonomy (every loop capped + budget + kill-switch)", "deferred",
+        None, "check lands with the control/budget governor"),
+    Law("L7", "File preservation (atomic writes; deletes via tombstone)", "deferred",
+        None, "check lands with the infra.io module"),
+    Law("L8", "One supervised entrypoint; no false-alarm startup", "deferred",
+        None, "check lands with the runtime/supervisor"),
+    Law("L10", "Failures self-explaining (cause required)", "deferred",
+        None, "AgentResult.cause field exists; runtime check lands with the agent runner"),
+    Law("A2", "Evals required for behaviour changes", "deferred",
+        None, "check lands with the eval harness"),
+]
+
+
+def active_laws_missing_check() -> list[Law]:
+    """The prime-directive violation set: active laws with no linked check."""
+    return [law for law in LAWS if law.status == "active" and not law.check]
