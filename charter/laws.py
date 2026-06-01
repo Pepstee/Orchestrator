@@ -39,7 +39,8 @@ LAWS: list[Law] = [
     Law("L4", "Deliverable purity (project tree isolated; no orchestrator scratch)", "active",
         "tests/test_workspace.py (containment + pristine) + builder L4 guard"),
     Law("L6", "Bounded autonomy (loops capped + budget + kill-switch)", "active",
-        "tests/test_budget.py (run loop bounded by max_steps, budget cap, kill-switch)"),
+        "tests/test_budget.py + tests/test_assurance.py (run + assurance loops bounded by "
+        "max-steps/cycles, budget cap, kill-switch, stop-signal)"),
     Law("L7", "File preservation (all mutation via infra.atomic_io)", "active",
         "tests/architecture/test_file_preservation.py"),
     Law("L8", "One supervised entrypoint; single-instance; graceful stop; no resurrection", "active",
