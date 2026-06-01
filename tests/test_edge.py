@@ -5,7 +5,7 @@ from pathlib import Path
 
 from control.confirm import request_confirmation
 from control.intake import submit_goal, submit_plan
-from edge.server import _cookie_token, authorised, build_state, escalations, load_or_create_token
+from edge.server import _cookie_token, _lan_ip, authorised, build_state, escalations, load_or_create_token
 from infra.event_store import EventStore
 
 
@@ -66,3 +66,8 @@ def test_token_is_created_once_and_stable(tmp_path: Path):
     first = load_or_create_token(tmp_path)
     second = load_or_create_token(tmp_path)
     assert first and first == second and (tmp_path / "gui_token.json").exists()
+
+
+def test_lan_ip_returns_a_usable_address():
+    ip = _lan_ip()                                  # never 0.0.0.0 (that's unreachable from a phone)
+    assert isinstance(ip, str) and ip and ip != "0.0.0.0"

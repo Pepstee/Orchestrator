@@ -14,6 +14,7 @@ import hmac
 import json
 import os
 import secrets
+import socket
 from http import cookies as http_cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -89,6 +90,19 @@ def load_or_create_token(state_dir: Path) -> str:
 
 def _is_loopback(host: str) -> bool:
     return host in ("127.0.0.1", "localhost", "::1", "")
+
+
+def _lan_ip() -> str:
+    """Best-effort LAN IP of this machine — the address a phone on the same network should open.
+    (0.0.0.0 means 'bind all interfaces' to the server but is NOT reachable as a destination.)"""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.connect(("8.8.8.8", 80))   # no packet is sent; this just picks the routing interface
+        return sock.getsockname()[0]
+    except OSError:
+        return "127.0.0.1"
+    finally:
+        sock.close()
 
 
 def _cookie_token(cookie_header: str | None) -> str | None:
@@ -204,10 +218,16 @@ def serve(host: str | None = None, port: int | None = None, *, token: str | None
     cdir = Path(confirm_dir) if confirm_dir else default_confirm_dir()
     ibox = Path(inbox) if inbox else default_inbox()
     httpd = ThreadingHTTPServer((host, port), _make_handler(cdir, ibox, token))
-    if not _is_loopback(host):
-        print("WARNING: bound to a non-loopback address — the surface is reachable on your network.")
+    if _is_loopback(host):
+        print(f"Da Nang surface: http://{host}:{port}/?token={token}")
+    else:
+        # 0.0.0.0 binds every interface but is unreachable as a URL — print the real LAN address.
+        print("WARNING: bound to a non-loopback address — reachable by anyone on your network.")
         print("         The token is the only protection; keep the URL private. Stop with Ctrl-C.")
-    print(f"Da Nang surface: http://{host}:{port}/?token={token}")
+        print(f"  on this Mac:     http://127.0.0.1:{port}/?token={token}")
+        print(f"  from your phone: http://{_lan_ip()}:{port}/?token={token}   (same Wi-Fi)")
+        print("  can't connect from the phone? allow incoming connections for python3 in")
+        print("  System Settings -> Network -> Firewall.")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
