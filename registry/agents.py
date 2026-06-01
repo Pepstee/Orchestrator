@@ -9,6 +9,12 @@ not a standalone agent (resisting v1's agent proliferation).
 """
 from __future__ import annotations
 
+import sys
+
+# Launch agents with the SAME interpreter running the orchestrator — guarantees it exists
+# (fixes "'python' not found" on macOS, where only python3 is on PATH).
+_PY = sys.executable or "python3"
+
 # task_type -> agent name. (One responsibility, one canonical mapping.)
 TASK_TYPE_TO_AGENT: dict[str, str] = {
     "plan": "task_manager",
@@ -21,12 +27,12 @@ TASK_TYPE_TO_AGENT: dict[str, str] = {
 
 # agent -> launch command (the subprocess contract).
 AGENT_COMMANDS: dict[str, list[str]] = {
-    "task_manager": ["python", "-m", "agents.task_manager"],
-    "architect":    ["python", "-m", "agents.architect"],
-    "builder":      ["python", "-m", "agents.builder"],
-    "judge":        ["python", "-m", "agents.judge"],
-    "tester":       ["python", "-m", "agents.tester"],
-    "overseer":     ["python", "-m", "agents.overseer"],
+    "task_manager": [_PY, "-m", "agents.task_manager"],
+    "architect":    [_PY, "-m", "agents.architect"],
+    "builder":      [_PY, "-m", "agents.builder"],
+    "judge":        [_PY, "-m", "agents.judge"],
+    "tester":       [_PY, "-m", "agents.tester"],
+    "overseer":     [_PY, "-m", "agents.overseer"],
 }
 
 # agent -> model assignment, decided by role stakes (ratified decision D4).

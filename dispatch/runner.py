@@ -8,11 +8,15 @@ yields an AgentResult carrying a `cause`, so the failure is self-explaining (fin
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+from pathlib import Path
 from typing import Callable
 
 from core.models import AgentResult, Task
 from registry import agents as reg
+
+_REPO_ROOT = str(Path(__file__).resolve().parents[1])
 
 
 def parse_agent_output(stdout: str) -> AgentResult:
@@ -31,7 +35,13 @@ def parse_agent_output(stdout: str) -> AgentResult:
     )
 
 
-def run_subprocess_agent(command: list[str], payload: dict, timeout: int = 4500) -> AgentResult:
+def run_subprocess_agent(
+    command: list[str],
+    payload: dict,
+    timeout: int = 4500,
+    cwd: str | None = None,
+    env: dict | None = None,
+) -> AgentResult:
     try:
         proc = subprocess.run(
             command,
@@ -39,6 +49,8 @@ def run_subprocess_agent(command: list[str], payload: dict, timeout: int = 4500)
             capture_output=True,
             text=True,
             timeout=timeout,
+            cwd=cwd,
+            env=env,
         )
     except subprocess.TimeoutExpired:
         return AgentResult(ok=False, summary="agent timed out", cause=f"timeout after {timeout}s")
@@ -55,7 +67,13 @@ def run_subprocess_agent(command: list[str], payload: dict, timeout: int = 4500)
 
 
 def make_subprocess_invoke() -> Callable[[Task], AgentResult]:
-    """The default invoke: resolve agent + command from the registry and run the subprocess."""
+    """The default invoke: resolve agent + command from the registry and run the subprocess.
+
+    Runs from the repo root with the repo on PYTHONPATH so `-m agents.<x>` resolves regardless of
+    where the orchestrator was launched. The agent then runs its own LLM in the project directory.
+    """
+    env = {**os.environ, "PYTHONPATH": _REPO_ROOT + os.pathsep + os.environ.get("PYTHONPATH", "")}
+
     def invoke(task: Task) -> AgentResult:
         agent = reg.TASK_TYPE_TO_AGENT.get(task.task_type)
         if agent is None:
@@ -63,5 +81,7 @@ def make_subprocess_invoke() -> Callable[[Task], AgentResult]:
                 ok=False, summary="no agent for task_type",
                 cause=f"unknown task_type {task.task_type!r}",
             )
-        return run_subprocess_agent(reg.AGENT_COMMANDS[agent], {"task": task.to_dict()})
+        return run_subprocess_agent(
+            reg.AGENT_COMMANDS[agent], {"task": task.to_dict()}, cwd=_REPO_ROOT, env=env,
+        )
     return invoke
