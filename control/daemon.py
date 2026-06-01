@@ -29,6 +29,7 @@ from dispatch.repository import TaskRepository
 from dispatch.runner import make_subprocess_invoke
 from infra import pidlock
 from infra.event_store import EventStore
+from infra.notify import notify
 from infra.workspace import default_projects_root, resolve_project_dir
 from pa.overseer import evolve as evolve_pa
 from pa.rules import consult, load_rules, save_rules
@@ -62,6 +63,7 @@ def monitor_projects(
         finalised.add(project)
         repo.record_project_status(project, gates=outcome.gates, pending_user=outcome.pending_user)
         if outcome.pending_user:
+            notify("Orchestrator", f"{project} is ready for your confirmation")  # the Da Nang nudge
             root = Path(projects_root) if projects_root else default_projects_root()
             assurance = run_assurance(str(resolve_project_dir(root, project)), tiers,
                                       should_stop=should_stop, governor=governor)
