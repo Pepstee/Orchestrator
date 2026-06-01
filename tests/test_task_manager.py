@@ -21,6 +21,18 @@ def test_parse_plan_garbage_is_empty():
     assert parse_plan("not a plan at all") == []
 
 
+def test_parse_plan_handles_fences_and_prose():
+    # the realistic case: the model wraps its array in ```json fences and chatty text
+    text = (
+        "Sure! Here's the plan:\n```json\n"
+        '[\n  {"title": "build", "task_type": "implement"},\n'
+        '  {"title": "review", "task_type": "validate", "depends_on": [0]}\n]\n'
+        "```\nLet me know if you want changes."
+    )
+    steps = parse_plan(text)
+    assert len(steps) == 2 and steps[0]["title"] == "build" and steps[1]["task_type"] == "validate"
+
+
 def test_build_prompt_includes_goal():
     assert "Goal: Build a thing" in build_prompt("Build a thing")
 

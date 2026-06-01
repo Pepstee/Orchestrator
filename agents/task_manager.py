@@ -8,6 +8,7 @@ ids here. The LLM call is injected, so the decomposition logic is testable witho
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from typing import Callable
 
@@ -35,9 +36,17 @@ def build_prompt(goal: str) -> str:
 
 
 def parse_plan(text: str) -> list[dict]:
-    """Extract the step array (a single-line array, else the whole text). Keep only dict steps with a title."""
-    candidates = [ln.strip() for ln in text.splitlines() if ln.strip().startswith("[")]
-    candidates.append(text)
+    """Extract the step array, tolerating markdown fences and surrounding prose.
+
+    Real LLM output often wraps the array in ```json fences or chatty text, so we strip fences and
+    try the outermost [ ... ] slice before falling back to the whole cleaned text.
+    """
+    cleaned = re.sub(r"```(?:json)?", " ", text)
+    candidates: list[str] = []
+    start, end = cleaned.find("["), cleaned.rfind("]")
+    if 0 <= start < end:
+        candidates.append(cleaned[start:end + 1])   # outermost [ ... ]
+    candidates.append(cleaned)
     for blob in candidates:
         try:
             data = json.loads(blob)
