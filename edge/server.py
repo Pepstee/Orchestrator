@@ -240,10 +240,6 @@ def main() -> None:
     serve()
 
 
-if __name__ == "__main__":
-    main()
-
-
 _UNAUTH_PAGE = """<!doctype html><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Orchestrator</title>
@@ -332,3 +328,7 @@ $('goal-form').addEventListener('submit', async (ev) => {
 refresh(); setInterval(refresh, 4000);
 </script>
 </body></html>"""
+
+
+if __name__ == "__main__":   # at the very end so all module constants (_PAGE, _UNAUTH_PAGE) exist first
+    main()

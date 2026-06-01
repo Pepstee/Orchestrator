@@ -1,12 +1,21 @@
-"""Behavioural: the Da Nang surface — durable read fold + action channels (no sockets needed)."""
+"""Behavioural: the Da Nang surface — durable read fold + action channels + the real entry path."""
 from __future__ import annotations
 
+import os
+import socket
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 from control.confirm import request_confirmation
 from control.intake import submit_goal, submit_plan
 from edge.server import _cookie_token, _lan_ip, authorised, build_state, escalations, load_or_create_token
 from infra.event_store import EventStore
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_build_state_folds_the_da_nang_view(tmp_path: Path):
@@ -71,3 +80,34 @@ def test_token_is_created_once_and_stable(tmp_path: Path):
 def test_lan_ip_returns_a_usable_address():
     ip = _lan_ip()                                  # never 0.0.0.0 (that's unreachable from a phone)
     assert isinstance(ip, str) and ip and ip != "0.0.0.0"
+
+
+def _free_port() -> int:
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
+def test_entrypoint_serves_the_page(tmp_path: Path):
+    """Run the REAL entry path (python -m edge.server) and GET '/'. Catches module-ordering bugs
+    (e.g. _PAGE defined after the __main__ guard) that importing the module masks."""
+    port = _free_port()
+    env = {**os.environ, "AGENTIC_GUI_HOST": "127.0.0.1", "AGENTIC_GUI_PORT": str(port),
+           "AGENTIC_GUI_TOKEN": "t0k", "PYTHONPATH": str(REPO_ROOT)}
+    proc = subprocess.Popen([sys.executable, "-m", "edge.server"], cwd=str(REPO_ROOT), env=env,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    try:
+        code, body = None, ""
+        for _ in range(50):
+            try:
+                resp = urllib.request.urlopen(f"http://127.0.0.1:{port}/?token=t0k", timeout=1)
+                code, body = resp.status, resp.read().decode()
+                break
+            except (urllib.error.URLError, ConnectionError):
+                time.sleep(0.1)
+        assert code == 200 and "<title>Orchestrator" in body
+    finally:
+        proc.terminate()
+        proc.wait(timeout=5)
