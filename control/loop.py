@@ -8,7 +8,7 @@ and it is bounded three ways (cap + budget + kill-switch), so no run can self-am
 from __future__ import annotations
 
 from control.budget import BudgetGovernor
-from dispatch.dispatcher import Invoke, run_one
+from dispatch.dispatcher import Invoke, PAConsult, run_one
 from dispatch.repository import TaskRepository
 
 
@@ -17,6 +17,8 @@ def run(
     invoke: Invoke,
     governor: BudgetGovernor,
     max_steps: int = 1000,
+    *,
+    pa_consult: PAConsult | None = None,
 ) -> int:
     """Drive ready tasks under the governor. Returns the count processed."""
     processed = 0
@@ -24,7 +26,7 @@ def run(
         stop, _reason = governor.should_stop()
         if stop:
             break
-        outcome = run_one(repo, invoke)
+        outcome = run_one(repo, invoke, pa_consult=pa_consult)
         if outcome is None:
             break
         _task, result = outcome

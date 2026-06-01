@@ -11,9 +11,12 @@ control layer (the dependency arrow points inward).
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from infra.llm import call_llm
+from registry.agents import model_for
 from validation.gates import GateResult, run_test_gate
 
 # A tier verifies a project directory and returns a pass/fail finding. Tiers are ordered by
@@ -58,6 +61,76 @@ def run_assurance(
 
 
 def default_tiers() -> list[Tier]:
-    """The shippable ladder: re-run the project's suite. LLM tiers (edge/mutation/adversarial/audit)
-    are appended here as they are built."""
+    """The cheapest deterministic ladder: just re-run the project's suite (no LLM, no budget)."""
     return [lambda project_dir: run_test_gate(project_dir)]
+
+
+def _parse_hardening(text: str) -> tuple[bool, str]:
+    """Parse a hardening verdict {issue_found, detail}. Unparseable -> inconclusive (no confirmed issue)."""
+    for line in reversed([ln.strip() for ln in text.splitlines() if ln.strip()]):
+        try:
+            data = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict) and "issue_found" in data:
+            return bool(data["issue_found"]), str(data.get("detail", ""))[:300]
+    return False, "inconclusive (unparseable hardening verdict)"
+
+
+def llm_tier(
+    name: str,
+    instruction: str,
+    *,
+    provider: str,
+    model: str,
+    governor: Any = None,
+    call: Callable[..., Any] = call_llm,
+) -> Tier:
+    """A read-only LLM hardening reviewer: it looks for the described weakness and reports an issue.
+
+    It modifies nothing (non-regressing); a found issue fails the tier (halting the loop to surface
+    it); an infra error or unparseable verdict is non-blocking. It charges the governor its cost.
+    """
+    def tier(project_dir: str) -> GateResult:
+        prompt = (
+            f"{instruction}\n\nReview the code in the current working directory. "
+            'Output ONLY a JSON line: {"issue_found": true|false, "detail": "..."}'
+        )
+        try:
+            res = call(
+                provider, model, prompt,
+                system="You are a rigorous, read-only code-hardening reviewer. Do not modify files.",
+                cwd=project_dir,
+            )
+        except Exception as exc:
+            return GateResult(name, True, f"tier skipped (error): {type(exc).__name__}: {exc}")
+        if governor is not None:
+            try:
+                governor.charge(float(res.cost_usd))
+            except Exception:
+                pass
+        issue, detail = _parse_hardening(res.text)
+        return GateResult(name, passed=not issue, detail=detail)
+
+    return tier
+
+
+def hardening_tiers(governor: Any = None, call: Callable[..., Any] = call_llm) -> list[Tier]:
+    """The escalating ladder: re-run tests -> mutation gap -> adversarial probe. The LLM tiers run on
+    the Judge's provider (independent of the builder)."""
+    jm = model_for("judge")
+    return [
+        lambda project_dir: run_test_gate(project_dir),
+        llm_tier(
+            "mutation",
+            "Identify a plausible small code change (mutation) that the existing tests would NOT "
+            "catch — a real gap in test coverage.",
+            provider=jm["provider"], model=jm["model"], governor=governor, call=call,
+        ),
+        llm_tier(
+            "adversarial",
+            "Identify an input or scenario (edge case, malformed or hostile input, or security flaw) "
+            "that the code mishandles.",
+            provider=jm["provider"], model=jm["model"], governor=governor, call=call,
+        ),
+    ]

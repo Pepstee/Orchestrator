@@ -73,8 +73,8 @@ def test_run_one_enqueues_bounded_spawned_tasks(tmp_path: Path):
 def test_failure_persists_cause(tmp_path: Path):
     p = tmp_path / "e.log"
     repo = TaskRepository(EventStore(p))
-    repo.create(Task(task_id="t1", title="x", task_type="implement"))
-    run_one(repo, _fail)
+    repo.create(Task(task_id="t1", title="x", task_type="implement", max_retries=0))
+    run_one(repo, _fail)   # no retries -> straight to escalate/FAIL
     assert repo.get("t1").status == TaskStatus.FAILED
     results = [e.data for e in EventStore(p).replay() if e.kind == "task_result"]
     assert results and results[-1]["cause"] == "boom"   # cause is durable (audit)

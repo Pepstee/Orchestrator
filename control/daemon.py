@@ -1,9 +1,10 @@
-"""control.daemon — the single supervised entrypoint (law L8).
+"""control.daemon — the single supervised entrypoint (law L8) + autonomous project lifecycle.
 
-Resumes the durable task log (resume-from-step), runs ready tasks under the budget-bounded loop,
-sleeps when idle, and stops gracefully on SIGTERM/SIGINT or a STOP sentinel. Exactly one instance
-(pid lock); there is NO auto-restart wrapper, so a soft-stop cannot resurrect it — the precise v1
-failure this avoids. Startup is quiet: nothing escalates or self-repairs on boot.
+Resumes the durable task log, ingests the inbox (live enqueue), runs ready tasks under the
+budget-bounded loop, and — once a project's whole graph is terminal — evaluates the four-gate
+completion contract, runs the progressive-assurance loop on a finalised project, and records
+`pending_user` durably (the signal a confirmation tray reads). Exactly one instance (pid lock);
+no auto-restart, so a soft-stop cannot resurrect it.
 
     Run:   python -m control.daemon
     Stop:  Ctrl-C / SIGTERM, or `touch STOP`
@@ -18,13 +19,56 @@ from pathlib import Path
 from typing import Callable
 
 from control.budget import BudgetGovernor
+from control.confirm import ingest_confirmations
 from control.inbox import ingest
 from control.loop import run as run_loop
-from dispatch.dispatcher import Invoke
+from control.project import DEFAULT_TEST_COMMAND, ProjectOutcome, evaluate_project
+from core.models import TaskStatus
+from dispatch.dispatcher import Invoke, PAConsult
 from dispatch.repository import TaskRepository
 from dispatch.runner import make_subprocess_invoke
 from infra import pidlock
 from infra.event_store import EventStore
+from infra.workspace import default_projects_root, resolve_project_dir
+from pa.overseer import evolve as evolve_pa
+from pa.rules import consult, load_rules, save_rules
+from validation.assurance import Tier, hardening_tiers, run_assurance
+
+
+def _all_terminal(repo: TaskRepository, project: str) -> bool:
+    tasks = [t for t in repo.list() if t.project == project]
+    return bool(tasks) and all(t.status in (TaskStatus.DONE, TaskStatus.FAILED) for t in tasks)
+
+
+def monitor_projects(
+    repo: TaskRepository,
+    finalised: set[str],
+    *,
+    projects_root: str | None = None,
+    test_command: tuple[str, ...] = DEFAULT_TEST_COMMAND,
+    governor: object | None = None,
+    tiers: list[Tier] | None = None,
+    should_stop: Callable[[], bool] = lambda: False,
+) -> list[ProjectOutcome]:
+    """For each project whose graph is fully terminal and not yet finalised: evaluate the gates,
+    record the status durably, and (if it passed the automated gates) run the assurance loop."""
+    tiers = tiers if tiers is not None else hardening_tiers(governor)
+    outcomes: list[ProjectOutcome] = []
+    for project in sorted({t.project for t in repo.list()}):
+        if project in finalised or not _all_terminal(repo, project):
+            continue
+        outcome = evaluate_project(repo, project=project, projects_root=projects_root,
+                                   test_command=test_command)
+        finalised.add(project)
+        repo.record_project_status(project, gates=outcome.gates, pending_user=outcome.pending_user)
+        if outcome.pending_user:
+            root = Path(projects_root) if projects_root else default_projects_root()
+            assurance = run_assurance(str(resolve_project_dir(root, project)), tiers,
+                                      should_stop=should_stop, governor=governor)
+            repo.record_assurance(project, fully_hardened=assurance.fully_hardened,
+                                  reason=assurance.stopped_reason)
+        outcomes.append(outcome)
+    return outcomes
 
 
 def serve(
@@ -36,14 +80,18 @@ def serve(
     poll_interval: float = 2.0,
     batch: int = 50,
     inbox: str | None = None,
+    on_cycle: Callable[[], None] | None = None,
+    pa_consult: PAConsult | None = None,
 ) -> int:
-    """Run ready tasks until should_stop(), ingesting newly-enqueued work each cycle (live enqueue)
-    and sleeping when idle. Returns total tasks processed."""
+    """Run ready tasks until should_stop(), ingesting newly-enqueued work each cycle and running an
+    optional per-cycle hook (project monitoring). Sleeps when idle. Returns total tasks processed."""
     total = 0
     while not should_stop():
-        ingest(repo, inbox)                  # pick up anything dropped into the inbox while running
-        processed = run_loop(repo, invoke, governor, max_steps=batch)
+        ingest(repo, inbox)
+        processed = run_loop(repo, invoke, governor, max_steps=batch, pa_consult=pa_consult)
         total += processed
+        if on_cycle is not None:
+            on_cycle()
         if processed == 0:
             time.sleep(poll_interval)
     return total
@@ -75,8 +123,22 @@ def main() -> None:
     def should_stop() -> bool:
         return stopped["flag"] or stop_sentinel.exists() or governor.should_stop()[0]
 
+    finalised: set[str] = set()
+    pa_path = state / "pa_rules.json"
+
+    def on_cycle() -> None:
+        ingest_confirmations(repo)   # apply any user confirmations (the fourth gate)
+        monitor_projects(repo, finalised, governor=governor, should_stop=should_stop)
+        rules = load_rules(pa_path)  # overseer evolves the PA from recurring failures (curated)
+        evolve_pa(rules, repo.failure_causes())
+        save_rules(pa_path, rules)
+
+    def pa_consult(cause: str) -> str | None:
+        return consult(cause, load_rules(pa_path))   # live fast-path over the active PA rules
+
     try:
-        serve(repo, governor, make_subprocess_invoke(), should_stop=should_stop)
+        serve(repo, governor, make_subprocess_invoke(), should_stop=should_stop,
+              on_cycle=on_cycle, pa_consult=pa_consult)
     finally:
         pidlock.release(lock)
 

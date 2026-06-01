@@ -35,18 +35,14 @@ class ProjectOutcome:
     pending_user: bool
 
 
-def run_project(
+def evaluate_project(
     repo: TaskRepository,
-    governor: BudgetGovernor,
     *,
     project: str,
-    invoke: Invoke,
     projects_root: str | None = None,
     test_command: tuple[str, ...] = DEFAULT_TEST_COMMAND,
-    max_steps: int = 1000,
 ) -> ProjectOutcome:
-    run_loop(repo, invoke, governor, max_steps)
-
+    """Evaluate the four-gate contract for a project (no loop). Reused by run_project and the daemon."""
     proj_tasks = [t for t in repo.list() if t.project == project]
     builds = [t for t in proj_tasks if t.task_type != "validate"]
     validates = [t for t in proj_tasks if t.task_type == "validate"]
@@ -68,3 +64,17 @@ def run_project(
         completion=completion,
         pending_user=(completion.unmet == ["user"]),
     )
+
+
+def run_project(
+    repo: TaskRepository,
+    governor: BudgetGovernor,
+    *,
+    project: str,
+    invoke: Invoke,
+    projects_root: str | None = None,
+    test_command: tuple[str, ...] = DEFAULT_TEST_COMMAND,
+    max_steps: int = 1000,
+) -> ProjectOutcome:
+    run_loop(repo, invoke, governor, max_steps)
+    return evaluate_project(repo, project=project, projects_root=projects_root, test_command=test_command)

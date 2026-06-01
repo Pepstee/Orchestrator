@@ -47,6 +47,39 @@ class TaskRepository:
             },
         )
 
+    def record_project_status(self, project: str, *, gates: dict, pending_user: bool) -> None:
+        """Persist a project's completion status (the durable signal a confirmation tray reads)."""
+        self._store.append(
+            "project_status",
+            {"project": project, "gates": gates, "pending_user": pending_user},
+        )
+
+    def record_confirmation(self, project: str) -> None:
+        """Persist the user's confirmation — the fourth gate, making the project truly DONE."""
+        self._store.append("project_confirmed", {"project": project})
+
+    def record_assurance(self, project: str, *, fully_hardened: bool, reason: str) -> None:
+        """Persist the progressive-assurance outcome for a project (surfaced in the tray)."""
+        self._store.append(
+            "assurance_result",
+            {"project": project, "fully_hardened": fully_hardened, "reason": reason},
+        )
+
+    def record_escalation(self, task_id: str, *, cause: str, reason: str) -> None:
+        """Persist that a failure was escalated to the user (PA fast-path or retries exhausted)."""
+        self._store.append(
+            "escalation",
+            {"task_id": task_id, "cause": cause, "reason": reason},
+        )
+
+    def failure_causes(self) -> list[str]:
+        """Every recorded failure cause (the overseer mines these to evolve the PA)."""
+        return [
+            ev.data.get("cause", "")
+            for ev in self._store.replay()
+            if ev.kind == "task_result" and not ev.data.get("ok") and ev.data.get("cause")
+        ]
+
     def get(self, task_id: str) -> Task | None:
         return self._tasks.get(task_id)
 

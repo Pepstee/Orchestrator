@@ -45,3 +45,55 @@ def test_budget_halts_the_loop():
 def test_default_tiers_is_a_nonempty_ladder():
     tiers = default_tiers()
     assert len(tiers) >= 1 and callable(tiers[0])
+
+
+# ── LLM hardening tiers (fakes; no tokens spent) ────────────────────────────────────────────
+from infra.llm import LLMResult  # noqa: E402
+from validation.assurance import hardening_tiers, llm_tier  # noqa: E402
+
+
+def _llm(text: str, cost: float = 0.0):
+    def call(provider, model, prompt, system=None, cwd=None, **_):
+        return LLMResult(text=text, cost_usd=cost, model=model)
+    return call
+
+
+def test_llm_tier_passes_when_no_issue():
+    t = llm_tier("mutation", "find gaps", provider="openai", model="codex",
+                 call=_llm('{"issue_found": false, "detail": "solid"}'))
+    r = t("/tmp")
+    assert r.passed and r.name == "mutation"
+
+
+def test_llm_tier_fails_on_found_issue():
+    t = llm_tier("adversarial", "find flaws", provider="openai", model="codex",
+                 call=_llm('{"issue_found": true, "detail": "off-by-one on empty input"}'))
+    r = t("/tmp")
+    assert not r.passed and "off-by-one" in r.detail
+
+
+def test_llm_tier_charges_the_governor():
+    class _Gov:
+        def __init__(self):
+            self.total = 0.0
+
+        def charge(self, c):
+            self.total += c
+
+    gov = _Gov()
+    llm_tier("m", "x", provider="claude", model="sonnet", governor=gov,
+             call=_llm('{"issue_found": false}', cost=0.05))("/tmp")
+    assert abs(gov.total - 0.05) < 1e-9
+
+
+def test_llm_tier_error_is_non_blocking():
+    def boom(*_a, **_k):
+        raise RuntimeError("cli down")
+
+    r = llm_tier("m", "x", provider="openai", model="codex", call=boom)("/tmp")
+    assert r.passed and "skipped" in r.detail
+
+
+def test_hardening_tiers_is_escalating_ladder():
+    tiers = hardening_tiers()
+    assert len(tiers) >= 3 and all(callable(t) for t in tiers)
