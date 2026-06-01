@@ -5,7 +5,7 @@ from pathlib import Path
 
 from control.confirm import request_confirmation
 from control.intake import submit_goal, submit_plan
-from edge.server import build_state, escalations
+from edge.server import _cookie_token, authorised, build_state, escalations, load_or_create_token
 from infra.event_store import EventStore
 
 
@@ -45,3 +45,24 @@ def test_goal_action_drops_inbox_tasks(tmp_path: Path):
 def test_plan_action_drops_one_task(tmp_path: Path):
     submit_plan("build a thing", project="demo", inbox=str(tmp_path))   # POST /api/goal {plan:true}
     assert len(list(tmp_path.glob("*.json"))) == 1
+
+
+def test_authorised_accepts_any_valid_source_and_fails_closed():
+    assert authorised("sek", auth_header="sek")
+    assert authorised("sek", query_token="sek")
+    assert authorised("sek", cookie_header="a=1; gui_token=sek; b=2")
+    assert not authorised("sek", auth_header="wrong")
+    assert not authorised("sek")                       # no credential at all
+    assert not authorised("", query_token="anything")  # unconfigured -> deny
+
+
+def test_cookie_token_parsing():
+    assert _cookie_token("a=1; gui_token=xyz; b=2") == "xyz"
+    assert _cookie_token("") is None
+    assert _cookie_token("nope=1") is None
+
+
+def test_token_is_created_once_and_stable(tmp_path: Path):
+    first = load_or_create_token(tmp_path)
+    second = load_or_create_token(tmp_path)
+    assert first and first == second and (tmp_path / "gui_token.json").exists()

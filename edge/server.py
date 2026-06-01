@@ -10,9 +10,14 @@ of what needs you, each with a one-tap action.
 """
 from __future__ import annotations
 
+import hmac
 import json
+import os
+import secrets
+from http import cookies as http_cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 from control.confirm import (
     default_confirm_dir,
@@ -23,6 +28,7 @@ from control.confirm import (
 )
 from control.inbox import default_inbox
 from control.intake import submit_goal, submit_plan
+from infra.atomic_io import read_json, write_json_atomic
 from infra.event_store import EventStore
 
 
@@ -63,39 +69,110 @@ def build_state(*, tasks_log: Path | None = None, budget_log: Path | None = None
     }
 
 
-def _make_handler(confirm_dir: Path, inbox: Path):
+def load_or_create_token(state_dir: Path) -> str:
+    """The shared GUI token: AGENTIC_GUI_TOKEN if set, else a persisted random one (created once)."""
+    env = os.environ.get("AGENTIC_GUI_TOKEN")
+    if env:
+        return env
+    path = Path(state_dir) / "gui_token.json"
+    data = read_json(path)
+    if isinstance(data, dict) and data.get("token"):
+        return str(data["token"])
+    token = secrets.token_urlsafe(32)
+    write_json_atomic(path, {"token": token})   # L7: the only sanctioned writer
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+    return token
+
+
+def _is_loopback(host: str) -> bool:
+    return host in ("127.0.0.1", "localhost", "::1", "")
+
+
+def _cookie_token(cookie_header: str | None) -> str | None:
+    if not cookie_header:
+        return None
+    jar = http_cookies.SimpleCookie()
+    try:
+        jar.load(cookie_header)
+    except http_cookies.CookieError:
+        return None
+    morsel = jar.get("gui_token")
+    return morsel.value if morsel else None
+
+
+def authorised(
+    expected: str,
+    *,
+    auth_header: str | None = None,
+    query_token: str | None = None,
+    cookie_header: str | None = None,
+) -> bool:
+    """True iff a valid token arrives by header, query param, or cookie. Fails closed (constant-time)."""
+    if not expected:
+        return False                                   # unconfigured -> deny, never open
+    candidates = [auth_header, query_token, _cookie_token(cookie_header)]
+    return any(c is not None and hmac.compare_digest(expected, c) for c in candidates)
+
+
+def _make_handler(confirm_dir: Path, inbox: Path, token: str):
     class Handler(BaseHTTPRequestHandler):
-        def _send(self, code: int, payload, *, content_type: str = "application/json") -> None:
+        def _send(self, code: int, payload, *, content_type: str = "application/json",
+                  extra_headers: dict | None = None) -> None:
             body = payload if isinstance(payload, bytes) else json.dumps(payload).encode()
             self.send_response(code)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
+            for key, value in (extra_headers or {}).items():
+                self.send_header(key, value)
             self.end_headers()
             self.wfile.write(body)
 
+        def _auth(self) -> tuple[bool, str]:
+            parts = urlsplit(self.path)
+            query_token = parse_qs(parts.query).get("token", [None])[0]
+            ok = authorised(token, auth_header=self.headers.get("X-Auth-Token"),
+                            query_token=query_token, cookie_header=self.headers.get("Cookie"))
+            return ok, parts.path
+
         def do_GET(self) -> None:  # noqa: N802 (stdlib API)
-            if self.path in ("/", "/index.html"):
-                self._send(200, _PAGE.encode(), content_type="text/html; charset=utf-8")
-            elif self.path == "/api/state":
+            ok, path = self._auth()
+            if path in ("/", "/index.html"):
+                if not ok:
+                    self._send(401, _UNAUTH_PAGE.encode(), content_type="text/html; charset=utf-8")
+                    return
+                cookie = f"gui_token={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000"
+                self._send(200, _PAGE.encode(), content_type="text/html; charset=utf-8",
+                           extra_headers={"Set-Cookie": cookie})
+            elif path == "/api/state":
+                if not ok:
+                    self._send(401, {"error": "unauthorised"})
+                    return
                 self._send(200, build_state())
             else:
                 self._send(404, {"error": "not found"})
 
         def do_POST(self) -> None:  # noqa: N802 (stdlib API)
+            ok, path = self._auth()
+            if not ok:
+                self._send(401, {"error": "unauthorised"})
+                return
             length = int(self.headers.get("Content-Length", 0) or 0)
             try:
                 body = json.loads(self.rfile.read(length) or b"{}")
             except (json.JSONDecodeError, ValueError):
                 self._send(400, {"error": "bad json"})
                 return
-            if self.path == "/api/confirm":
+            if path == "/api/confirm":
                 project = str(body.get("project", "")).strip()
                 if not project:
                     self._send(400, {"error": "project required"})
                     return
                 request_confirmation(project, confirm_dir)
                 self._send(200, {"ok": True, "project": project})
-            elif self.path == "/api/goal":
+            elif path == "/api/goal":
                 goal = str(body.get("goal", "")).strip()
                 project = str(body.get("project", "")).strip()
                 if not goal or not project:
@@ -116,13 +193,21 @@ def _make_handler(confirm_dir: Path, inbox: Path):
     return Handler
 
 
-def serve(host: str = "127.0.0.1", port: int = 8765, *,
-          confirm_dir: Path | str | None = None, inbox: Path | str | None = None) -> None:
-    """Run the Da Nang surface until interrupted."""
+def serve(host: str | None = None, port: int | None = None, *, token: str | None = None,
+          confirm_dir: Path | str | None = None, inbox: Path | str | None = None,
+          state_dir: Path | str | None = None) -> None:
+    """Run the Da Nang surface until interrupted (token-gated; bind address configurable)."""
+    state = Path(state_dir) if state_dir else _state_root()
+    host = host or os.environ.get("AGENTIC_GUI_HOST", "127.0.0.1")
+    port = int(port if port is not None else os.environ.get("AGENTIC_GUI_PORT", "8765"))
+    token = token or load_or_create_token(state)
     cdir = Path(confirm_dir) if confirm_dir else default_confirm_dir()
     ibox = Path(inbox) if inbox else default_inbox()
-    httpd = ThreadingHTTPServer((host, port), _make_handler(cdir, ibox))
-    print(f"Da Nang surface on http://{host}:{port}  (Ctrl-C to stop)")
+    httpd = ThreadingHTTPServer((host, port), _make_handler(cdir, ibox, token))
+    if not _is_loopback(host):
+        print("WARNING: bound to a non-loopback address — the surface is reachable on your network.")
+        print("         The token is the only protection; keep the URL private. Stop with Ctrl-C.")
+    print(f"Da Nang surface: http://{host}:{port}/?token={token}")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
@@ -137,6 +222,16 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+_UNAUTH_PAGE = """<!doctype html><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Orchestrator</title>
+<body style="font: 16px/1.6 -apple-system, system-ui, sans-serif; max-width: 420px; margin: 12vh auto; padding: 0 1rem;">
+<h1 style="font-size: 1.2rem;">Token required</h1>
+<p style="opacity: .7;">Open this surface with your access token appended, e.g.
+<code>?token=…</code>. The daemon prints the full URL on startup.</p>
+</body>"""
 
 
 _PAGE = """<!doctype html>
