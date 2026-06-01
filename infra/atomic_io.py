@@ -42,6 +42,14 @@ def append_jsonl(path: Path | str, record: dict[str, Any]) -> None:
         os.fsync(fh.fileno())
 
 
+def remove(path: Path | str) -> None:
+    """Best-effort delete — the single sanctioned deleter (law L7)."""
+    try:
+        Path(path).unlink()
+    except (FileNotFoundError, OSError):
+        pass
+
+
 def read_jsonl(path: Path | str) -> Iterator[dict[str, Any]]:
     p = Path(path)
     if not p.exists():
