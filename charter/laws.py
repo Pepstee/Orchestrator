@@ -38,8 +38,8 @@ LAWS: list[Law] = [
     # Deferred — subsystem not built yet; check planned (gap kept explicit and traceable).
     Law("L4", "Deliverable purity (project tree has no orchestrator scratch)", "deferred",
         None, "check lands with the build/dispatch pipeline"),
-    Law("L6", "Bounded autonomy (every loop capped + budget + kill-switch)", "deferred",
-        None, "check lands with the control/budget governor"),
+    Law("L6", "Bounded autonomy (loops capped + budget + kill-switch)", "active",
+        "tests/test_budget.py (run loop bounded by max_steps, budget cap, kill-switch)"),
     Law("L7", "File preservation (all mutation via infra.atomic_io)", "active",
         "tests/architecture/test_file_preservation.py"),
     Law("L8", "One supervised entrypoint; no false-alarm startup", "deferred",

@@ -6,7 +6,7 @@ Illegal transitions are no-ops, never crashes — the structural fix for v1's tr
 """
 from __future__ import annotations
 
-from core.models import Event, Task, TaskStatus
+from core.models import AgentResult, Event, Task, TaskStatus
 from core.state_machine import transition
 from infra.event_store import EventStore
 
@@ -33,6 +33,19 @@ class TaskRepository:
             {"task_id": task_id, "event": event.value, "from": old.value, "to": new_status.value},
         )
         return task
+
+    def record_result(self, task_id: str, result: AgentResult) -> None:
+        """Persist an agent's result to the durable log (audit; a failure carries its cause)."""
+        self._store.append(
+            "task_result",
+            {
+                "task_id": task_id,
+                "ok": result.ok,
+                "summary": result.summary,
+                "cause": result.cause,
+                "artifacts": result.artifacts,
+            },
+        )
 
     def get(self, task_id: str) -> Task | None:
         return self._tasks.get(task_id)
