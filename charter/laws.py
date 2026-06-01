@@ -36,8 +36,8 @@ LAWS: list[Law] = [
         "tests/architecture/test_every_law_has_a_check.py"),
 
     # Deferred — subsystem not built yet; check planned (gap kept explicit and traceable).
-    Law("L4", "Deliverable purity (project tree has no orchestrator scratch)", "deferred",
-        None, "check lands with the build/dispatch pipeline"),
+    Law("L4", "Deliverable purity (project tree isolated; no orchestrator scratch)", "active",
+        "tests/test_workspace.py (containment + pristine) + builder L4 guard"),
     Law("L6", "Bounded autonomy (loops capped + budget + kill-switch)", "active",
         "tests/test_budget.py (run loop bounded by max_steps, budget cap, kill-switch)"),
     Law("L7", "File preservation (all mutation via infra.atomic_io)", "active",

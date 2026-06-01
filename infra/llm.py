@@ -31,24 +31,57 @@ def _parse_claude_output(stdout: str) -> LLMResult:
     return LLMResult(text=text, cost_usd=cost, model=model)
 
 
+def _parse_codex_output(stdout: str) -> LLMResult:
+    """Parse `codex exec --json` JSONL: take the last agent_message text.
+
+    Validated against real Codex output (2026-06-01). Usage is reported in tokens, not dollars
+    (subscription-covered), so marginal cost is 0.0; token counts remain in the raw stream if a
+    later slice wants to impute them.
+    """
+    text = ""
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            ev = json.loads(line)
+        except json.JSONDecodeError:
+            continue  # skip any interleaved log lines
+        if ev.get("type") == "item.completed":
+            item = ev.get("item") or {}
+            if item.get("type") == "agent_message" and isinstance(item.get("text"), str):
+                text = item["text"]  # keep the last agent_message
+    return LLMResult(text=text, cost_usd=0.0, model="codex")
+
+
 def call_llm(
     provider: str,
     model: str,
     prompt: str,
     *,
     system: str | None = None,
+    cwd: str | None = None,
     timeout: int = 600,
 ) -> LLMResult:
     if provider == "claude":
         full = f"{system}\n\n{prompt}" if system else prompt
         cmd = ["claude", "-p", "--output-format", "json", "--model", model]
-        proc = subprocess.run(cmd, input=full, capture_output=True, text=True, timeout=timeout)
+        if cwd:
+            # file-writing mode: run in the project dir and allow the editing tools headlessly
+            cmd.append("--dangerously-skip-permissions")
+        proc = subprocess.run(
+            cmd, input=full, capture_output=True, text=True, timeout=timeout, cwd=cwd
+        )
         if proc.returncode != 0:
             raise RuntimeError(f"claude exited {proc.returncode}: {(proc.stderr or '')[-300:]}")
         return _parse_claude_output(proc.stdout)
     if provider == "openai":
-        raise NotImplementedError(
-            "openai/codex path: parser must be validated against real `codex exec --json` "
-            "output before use (Judge slice)"
+        full = f"{system}\n\n{prompt}" if system else prompt
+        proc = subprocess.run(
+            ["codex", "exec", "--json", full],
+            capture_output=True, text=True, timeout=timeout, cwd=cwd,
         )
+        if proc.returncode != 0:
+            raise RuntimeError(f"codex exited {proc.returncode}: {(proc.stderr or '')[-300:]}")
+        return _parse_codex_output(proc.stdout)
     raise ValueError(f"unknown provider {provider!r}")
