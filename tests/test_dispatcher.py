@@ -54,6 +54,22 @@ def test_dependent_not_run_when_prereq_fails(tmp_path: Path):
     assert repo.get("b").status == TaskStatus.QUEUED   # never became ready
 
 
+def test_run_one_enqueues_bounded_spawned_tasks(tmp_path: Path):
+    repo = _repo(tmp_path)
+    repo.create(Task(task_id="p1", title="plan", task_type="plan", project="x"))
+    spawned = [
+        Task(task_id=f"s{i}", title=f"s{i}", task_type="implement", project="x").to_dict()
+        for i in range(60)
+    ]
+
+    def invoke(_task: Task) -> AgentResult:
+        return AgentResult(ok=True, summary="planned", spawned_tasks=spawned)
+
+    run_one(repo, invoke)
+    created = [t for t in repo.list() if t.task_id.startswith("s")]
+    assert len(created) == 50   # capped by MAX_SPAWNED_PER_TASK (L6)
+
+
 def test_failure_persists_cause(tmp_path: Path):
     p = tmp_path / "e.log"
     repo = TaskRepository(EventStore(p))

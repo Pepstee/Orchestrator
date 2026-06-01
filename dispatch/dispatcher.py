@@ -15,6 +15,9 @@ from dispatch.repository import TaskRepository
 # An invoke takes a task and returns its AgentResult (subprocess agent, or a test stub).
 Invoke = Callable[[Task], AgentResult]
 
+# Bound dynamic decomposition: a single task may spawn at most this many sub-tasks (law L6).
+MAX_SPAWNED_PER_TASK = 50
+
 
 def is_ready(repo: TaskRepository, task: Task) -> bool:
     """A queued task is ready when every prerequisite exists and is DONE."""
@@ -42,6 +45,12 @@ def run_one(repo: TaskRepository, invoke: Invoke) -> tuple[Task, AgentResult] | 
     repo.apply(task.task_id, Event.CLAIM)            # QUEUED -> IN_PROGRESS
     result = invoke(task)
     repo.record_result(task.task_id, result)         # persist ok/summary/cause (audit, L10)
+    if result.ok and result.spawned_tasks:           # dynamic decomposition (bounded, L6)
+        for spec in result.spawned_tasks[:MAX_SPAWNED_PER_TASK]:
+            try:
+                repo.create(Task.from_dict(spec))
+            except (KeyError, TypeError, ValueError):
+                pass  # malformed spawn spec — skip, never crash the loop
     repo.apply(task.task_id, Event.COMPLETE if result.ok else Event.FAIL)
     return task, result
 

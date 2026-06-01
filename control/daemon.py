@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Callable
 
 from control.budget import BudgetGovernor
+from control.inbox import ingest
 from control.loop import run as run_loop
 from dispatch.dispatcher import Invoke
 from dispatch.repository import TaskRepository
@@ -34,10 +35,13 @@ def serve(
     should_stop: Callable[[], bool],
     poll_interval: float = 2.0,
     batch: int = 50,
+    inbox: str | None = None,
 ) -> int:
-    """Run ready tasks until should_stop(), sleeping when idle. Returns total tasks processed."""
+    """Run ready tasks until should_stop(), ingesting newly-enqueued work each cycle (live enqueue)
+    and sleeping when idle. Returns total tasks processed."""
     total = 0
     while not should_stop():
+        ingest(repo, inbox)                  # pick up anything dropped into the inbox while running
         processed = run_loop(repo, invoke, governor, max_steps=batch)
         total += processed
         if processed == 0:

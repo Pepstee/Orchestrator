@@ -42,6 +42,17 @@ def append_jsonl(path: Path | str, record: dict[str, Any]) -> None:
         os.fsync(fh.fileno())
 
 
+def read_json(path: Path | str) -> Any | None:
+    """Read a JSON file, or None if absent/corrupt (the read counterpart to write_json_atomic)."""
+    p = Path(path)
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
 def remove(path: Path | str) -> None:
     """Best-effort delete — the single sanctioned deleter (law L7)."""
     try:

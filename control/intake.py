@@ -19,18 +19,30 @@ def submit_goal(
     *,
     project: str,
     acceptance: list[str] | None = None,
-    store_path: str | None = None,
+    inbox: str | None = None,
 ) -> list[str]:
     """Decompose a goal into a build -> judge graph and enqueue it. Returns [build_id, validate_id]."""
     build_id = enqueue(
         goal, task_type="implement", project=project,
-        acceptance=acceptance, store_path=store_path,
+        acceptance=acceptance, inbox=inbox,
     )
     validate_id = enqueue(
         f"Independently review: {goal}", task_type="validate", project=project,
-        acceptance=acceptance, depends_on=[build_id], store_path=store_path,
+        acceptance=acceptance, depends_on=[build_id], inbox=inbox,
     )
     return [build_id, validate_id]
+
+
+def submit_plan(
+    goal: str,
+    *,
+    project: str,
+    acceptance: list[str] | None = None,
+    inbox: str | None = None,
+) -> str:
+    """Enqueue a single 'plan' task; the Task Manager decomposes it dynamically at run time
+    (the LLM-driven alternative to the deterministic build->judge pair). Returns the plan task id."""
+    return enqueue(goal, task_type="plan", project=project, acceptance=acceptance, inbox=inbox)
 
 
 def main() -> None:
@@ -40,9 +52,16 @@ def main() -> None:
     p.add_argument("goal")
     p.add_argument("--project", required=True)
     p.add_argument("--accept", nargs="*", default=[], dest="acceptance")
+    p.add_argument("--plan", action="store_true",
+                   help="use the Task Manager to decompose the goal dynamically (LLM), "
+                        "instead of the deterministic build->judge pair")
     args = p.parse_args()
-    build_id, validate_id = submit_goal(args.goal, project=args.project, acceptance=args.acceptance)
-    print(f"submitted to project {args.project!r}: build={build_id} validate={validate_id}")
+    if args.plan:
+        plan_id = submit_plan(args.goal, project=args.project, acceptance=args.acceptance)
+        print(f"submitted plan task to project {args.project!r}: {plan_id}")
+    else:
+        build_id, validate_id = submit_goal(args.goal, project=args.project, acceptance=args.acceptance)
+        print(f"submitted to project {args.project!r}: build={build_id} validate={validate_id}")
 
 
 if __name__ == "__main__":
