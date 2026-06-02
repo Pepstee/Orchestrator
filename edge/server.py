@@ -40,20 +40,53 @@ def _state_root() -> Path:
 
 
 def escalations(store: EventStore) -> list[dict]:
-    """Open escalations (task failures routed to the user), latest signal per task."""
-    latest: dict[str, dict] = {}
+    """OPEN escalations only — task failures still awaiting the user. An escalation is resolved
+    (and dropped) when its project has been confirmed, or when a later same-type task in the project
+    has since completed (a retry or overseer fix superseded the failure). Otherwise the tray would
+    accumulate resolved failures forever over a long unattended run."""
+    created: list[tuple[str, str, str]] = []     # (task_id, project, task_type) in creation order
+    status: dict[str, str] = {}
+    confirmed: set[str] = set()
+    raw: dict[str, dict] = {}
     for ev in store.replay():
-        if ev.kind == "escalation":
-            latest[ev.data["task_id"]] = {
-                "task_id": ev.data["task_id"],
-                "cause": ev.data.get("cause", ""),
-                "reason": ev.data.get("reason", ""),
-                "project": ev.data.get("project", ""),
+        d = ev.data
+        if ev.kind == "task_created":
+            t = d["task"]
+            created.append((t["task_id"], t.get("project", ""), t.get("task_type", "")))
+            status[t["task_id"]] = t.get("status", "queued")
+        elif ev.kind == "task_transition" and d["task_id"] in status:
+            status[d["task_id"]] = d["to"]
+        elif ev.kind == "project_confirmed":
+            confirmed.add(d["project"])
+        elif ev.kind == "escalation":
+            raw[d["task_id"]] = {
+                "task_id": d["task_id"], "cause": d.get("cause", ""),
+                "reason": d.get("reason", ""), "project": d.get("project", ""),
             }
-    return [latest[k] for k in sorted(latest)]
+    proj_of = {tid: p for tid, p, _ in created}
+    type_of = {tid: ty for tid, _, ty in created}
+
+    def superseded(tid: str, project: str, ttype: str) -> bool:
+        seen = False
+        for cid, cproj, ctype in created:
+            if cid == tid:
+                seen = True
+            elif seen and cproj == project and ctype == ttype and status.get(cid) == "done":
+                return True
+        return False
+
+    out: list[dict] = []
+    for tid, esc in raw.items():
+        project = esc["project"] or proj_of.get(tid, "")
+        if (project and project in confirmed) or superseded(tid, project, type_of.get(tid, "")):
+            continue
+        esc["project"] = project
+        out.append(esc)
+    return sorted(out, key=lambda e: e["task_id"])
 
 
-def _budget_spent(budget_log: Path) -> float:
+def _budget_spent(budget_log: Path | str) -> float:
+    budget_log = Path(budget_log)
     if not budget_log.exists():
         return 0.0
     return round(sum(float(e.data.get("cost", 0.0))

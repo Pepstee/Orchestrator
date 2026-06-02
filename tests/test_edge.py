@@ -75,6 +75,34 @@ def test_escalations_carry_project(tmp_path: Path):
     assert out[0]["project"] == "roman"   # the overseer needs this to know which project to act on
 
 
+def test_escalation_cleared_when_project_confirmed(tmp_path: Path):
+    s = EventStore(tmp_path / "e.log")
+    s.append("task_created", {"task": {"task_id": "v1", "project": "roman", "task_type": "validate"}})
+    s.append("task_transition", {"task_id": "v1", "from": "in_progress", "to": "failed", "event": "fail"})
+    s.append("escalation", {"task_id": "v1", "cause": "127", "reason": "retries exhausted", "project": "roman"})
+    s.append("project_confirmed", {"project": "roman"})
+    assert escalations(EventStore(tmp_path / "e.log")) == []   # project done -> escalation resolved
+
+
+def test_escalation_cleared_when_retry_supersedes(tmp_path: Path):
+    s = EventStore(tmp_path / "e.log")
+    s.append("task_created", {"task": {"task_id": "v1", "project": "p", "task_type": "validate"}})
+    s.append("task_transition", {"task_id": "v1", "from": "in_progress", "to": "failed", "event": "fail"})
+    s.append("escalation", {"task_id": "v1", "cause": "boom", "reason": "retries exhausted", "project": "p"})
+    s.append("task_created", {"task": {"task_id": "v2", "project": "p", "task_type": "validate"}})
+    s.append("task_transition", {"task_id": "v2", "from": "in_progress", "to": "done", "event": "complete"})
+    assert escalations(EventStore(tmp_path / "e.log")) == []   # a later passing validate supersedes it
+
+
+def test_escalation_kept_while_genuinely_open(tmp_path: Path):
+    s = EventStore(tmp_path / "e.log")
+    s.append("task_created", {"task": {"task_id": "x", "project": "p", "task_type": "validate"}})
+    s.append("task_transition", {"task_id": "x", "from": "in_progress", "to": "failed", "event": "fail"})
+    s.append("escalation", {"task_id": "x", "cause": "boom", "reason": "retries exhausted", "project": "p"})
+    out = escalations(EventStore(tmp_path / "e.log"))
+    assert len(out) == 1 and out[0]["task_id"] == "x"   # unresolved -> still needs the user
+
+
 def test_authorised_accepts_any_valid_source_and_fails_closed():
     assert authorised("sek", auth_header="sek")
     assert authorised("sek", query_token="sek")
