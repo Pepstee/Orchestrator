@@ -34,7 +34,12 @@ def build_prompt(task: Task) -> str:
         f"Task that was implemented: {task.title}\n\n"
         f"Acceptance criteria:\n{crit}\n\n"
         "Independently review the implementation in the current working directory against the task "
-        "and its acceptance criteria. Be strict and skeptical.\n\n"
+        "and its acceptance criteria. Be strict and skeptical about correctness and safety — a "
+        "passing test suite is not proof.\n"
+        "If you choose to run the tests yourself, run `pytest -q` from the current directory (it "
+        "discovers tests anywhere; do NOT assume a tests/ subdirectory). Base your verdict on whether "
+        "the implementation is actually correct and meets the criteria — do NOT fail solely because a "
+        "command you picked could not run in this environment; that is a tooling note, not a defect.\n\n"
         'Output ONLY a final JSON line: {"verdict":"pass"|"fail","reasons":[...],"confidence":0.0-1.0}'
     )
 

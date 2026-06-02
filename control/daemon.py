@@ -124,6 +124,7 @@ def main() -> None:
     signal.signal(signal.SIGINT, _handle)
 
     repo = TaskRepository.replay(EventStore(state / "tasks.events.log"))
+    repo.reclaim_orphans()   # crash/restart recovery: re-queue tasks orphaned mid-flight (e.g. the 5h restart)
     governor = BudgetGovernor(
         EventStore(state / "budget.events.log"),
         cap_usd=float(os.environ.get("AGENTIC_BUDGET_USD", "10.0")),

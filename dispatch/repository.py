@@ -80,6 +80,17 @@ class TaskRepository:
             if ev.kind == "task_result" and not ev.data.get("ok") and ev.data.get("cause")
         ]
 
+    def reclaim_orphans(self) -> int:
+        """Re-queue tasks left IN_PROGRESS by a crash or restart (L11 recovery). Their subprocess died
+        with the old daemon, so nothing would ever finish them; RECLAIM returns them to QUEUED. Run on
+        startup — essential when the daemon is restarted on the Claude Max 5-hour cadence."""
+        count = 0
+        for task in list(self._tasks.values()):
+            if task.status == TaskStatus.IN_PROGRESS:
+                self.apply(task.task_id, Event.RECLAIM)
+                count += 1
+        return count
+
     def get(self, task_id: str) -> Task | None:
         return self._tasks.get(task_id)
 
