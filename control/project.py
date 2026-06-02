@@ -16,13 +16,13 @@ from pathlib import Path
 
 from control.budget import BudgetGovernor
 from control.loop import run as run_loop
-from core.models import TaskStatus
+from core.models import Task, TaskStatus
 from dispatch.dispatcher import Invoke
 from dispatch.repository import TaskRepository
 from infra.workspace import default_projects_root, resolve_project_dir
-from validation.gates import CompletionResult, evaluate_completion, run_test_gate
+from validation.gates import DEFAULT_TEST_COMMAND, CompletionResult, evaluate_completion, run_test_gate
 
-DEFAULT_TEST_COMMAND = ("python", "-m", "pytest", "-q")
+__all__ = ["DEFAULT_TEST_COMMAND", "ProjectOutcome", "evaluate_project", "run_project"]
 
 
 @dataclass
@@ -35,6 +35,21 @@ class ProjectOutcome:
     pending_user: bool
 
 
+def _live_tasks(tasks: list[Task]) -> list[Task]:
+    """Drop a FAILED task that a later same-type task has since completed: a successful retry
+    supersedes it, so a stale failure (e.g. a validate that failed during an outage) can't poison a
+    project's gates forever. `tasks` is in creation order, so a later DONE means a newer attempt."""
+    live: list[Task] = []
+    for i, task in enumerate(tasks):
+        superseded = task.status == TaskStatus.FAILED and any(
+            later.task_type == task.task_type and later.status == TaskStatus.DONE
+            for later in tasks[i + 1:]
+        )
+        if not superseded:
+            live.append(task)
+    return live
+
+
 def evaluate_project(
     repo: TaskRepository,
     *,
@@ -43,7 +58,7 @@ def evaluate_project(
     test_command: tuple[str, ...] = DEFAULT_TEST_COMMAND,
 ) -> ProjectOutcome:
     """Evaluate the four-gate contract for a project (no loop). Reused by run_project and the daemon."""
-    proj_tasks = [t for t in repo.list() if t.project == project]
+    proj_tasks = _live_tasks([t for t in repo.list() if t.project == project])
     builds = [t for t in proj_tasks if t.task_type != "validate"]
     validates = [t for t in proj_tasks if t.task_type == "validate"]
 

@@ -41,9 +41,14 @@ def _all_terminal(repo: TaskRepository, project: str) -> bool:
     return bool(tasks) and all(t.status in (TaskStatus.DONE, TaskStatus.FAILED) for t in tasks)
 
 
+def _signature(repo: TaskRepository, project: str) -> frozenset:
+    """A project's current (task_id, status) set — changes when the overseer adds/re-runs work."""
+    return frozenset((t.task_id, t.status.value) for t in repo.list() if t.project == project)
+
+
 def monitor_projects(
     repo: TaskRepository,
-    finalised: set[str],
+    evaluated: dict[str, frozenset],
     *,
     projects_root: str | None = None,
     test_command: tuple[str, ...] = DEFAULT_TEST_COMMAND,
@@ -51,16 +56,20 @@ def monitor_projects(
     tiers: list[Tier] | None = None,
     should_stop: Callable[[], bool] = lambda: False,
 ) -> list[ProjectOutcome]:
-    """For each project whose graph is fully terminal and not yet finalised: evaluate the gates,
-    record the status durably, and (if it passed the automated gates) run the assurance loop."""
+    """For each project whose graph is fully terminal: if its task signature has changed since the
+    last evaluation (so an overseer fix re-opens it), evaluate the gates, record the status durably,
+    and — if it passed the automated gates — run the assurance loop."""
     tiers = tiers if tiers is not None else hardening_tiers(governor)
     outcomes: list[ProjectOutcome] = []
     for project in sorted({t.project for t in repo.list()}):
-        if project in finalised or not _all_terminal(repo, project):
+        if not _all_terminal(repo, project):
             continue
+        sig = _signature(repo, project)
+        if evaluated.get(project) == sig:
+            continue                                  # unchanged since last evaluation — skip
         outcome = evaluate_project(repo, project=project, projects_root=projects_root,
                                    test_command=test_command)
-        finalised.add(project)
+        evaluated[project] = sig
         repo.record_project_status(project, gates=outcome.gates, pending_user=outcome.pending_user)
         if outcome.pending_user:
             notify("Orchestrator", f"{project} is ready for your confirmation")  # the Da Nang nudge
@@ -125,12 +134,12 @@ def main() -> None:
     def should_stop() -> bool:
         return stopped["flag"] or stop_sentinel.exists() or governor.should_stop()[0]
 
-    finalised: set[str] = set()
+    evaluated: dict[str, frozenset] = {}
     pa_path = state / "pa_rules.json"
 
     def on_cycle() -> None:
         ingest_confirmations(repo)   # apply any user confirmations (the fourth gate)
-        monitor_projects(repo, finalised, governor=governor, should_stop=should_stop)
+        monitor_projects(repo, evaluated, governor=governor, should_stop=should_stop)
         rules = load_rules(pa_path)  # overseer evolves the PA from recurring failures (curated)
         evolve_pa(rules, repo.failure_causes())
         save_rules(pa_path, rules)

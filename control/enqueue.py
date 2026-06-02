@@ -22,6 +22,7 @@ def enqueue(
     project: str = "default",
     acceptance: list[str] | None = None,
     depends_on: list[str] | None = None,
+    payload: dict | None = None,
     inbox: str | None = None,
 ) -> str:
     task_id = uuid.uuid4().hex[:12]
@@ -29,6 +30,7 @@ def enqueue(
         Task(
             task_id=task_id, title=title, task_type=task_type, project=project,
             acceptance_criteria=list(acceptance or []), depends_on=list(depends_on or []),
+            payload=dict(payload or {}),
         ),
         inbox,
     )

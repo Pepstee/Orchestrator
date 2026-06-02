@@ -65,11 +65,11 @@ class TaskRepository:
             {"project": project, "fully_hardened": fully_hardened, "reason": reason},
         )
 
-    def record_escalation(self, task_id: str, *, cause: str, reason: str) -> None:
+    def record_escalation(self, task_id: str, *, cause: str, reason: str, project: str = "") -> None:
         """Persist that a failure was escalated to the user (PA fast-path or retries exhausted)."""
         self._store.append(
             "escalation",
-            {"task_id": task_id, "cause": cause, "reason": reason},
+            {"task_id": task_id, "cause": cause, "reason": reason, "project": project},
         )
 
     def failure_causes(self) -> list[str]:

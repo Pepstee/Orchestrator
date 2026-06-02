@@ -88,7 +88,7 @@ def main() -> None:
     print(f"   budget spent  -> ${gov.spent():.4f}")
 
     banner(4, "Evaluate the four gates + run the assurance loop  (deterministic tier)")
-    for o in monitor_projects(repo, set(), projects_root=str(projroot),
+    for o in monitor_projects(repo, {}, projects_root=str(projroot),
                               test_command=_TEST_CMD, tiers=tiers(), governor=gov):
         print(f"   {o.project}: gates={o.gates}  pending_user={o.pending_user}")
 

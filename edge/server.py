@@ -15,6 +15,7 @@ import json
 import os
 import secrets
 import socket
+import subprocess
 from http import cookies as http_cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -27,6 +28,7 @@ from control.confirm import (
     project_states,
     request_confirmation,
 )
+from control.enqueue import enqueue
 from control.inbox import default_inbox
 from control.intake import submit_goal, submit_plan
 from infra.atomic_io import read_json, write_json_atomic
@@ -46,6 +48,7 @@ def escalations(store: EventStore) -> list[dict]:
                 "task_id": ev.data["task_id"],
                 "cause": ev.data.get("cause", ""),
                 "reason": ev.data.get("reason", ""),
+                "project": ev.data.get("project", ""),
             }
     return [latest[k] for k in sorted(latest)]
 
@@ -103,6 +106,16 @@ def _lan_ip() -> str:
         return "127.0.0.1"
     finally:
         sock.close()
+
+
+def _tailscale_ip() -> str | None:
+    """The Mac's Tailscale (100.x) address if Tailscale is up — reachable from anywhere, privately."""
+    try:
+        out = subprocess.run(["tailscale", "ip", "-4"], capture_output=True, text=True, timeout=3)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    line = (out.stdout or "").strip().splitlines()
+    return line[0].strip() if out.returncode == 0 and line else None
 
 
 def _cookie_token(cookie_header: str | None) -> str | None:
@@ -198,6 +211,16 @@ def _make_handler(confirm_dir: Path, inbox: Path, token: str):
                 else:
                     ids = submit_goal(goal, project=project, acceptance=acceptance, inbox=str(inbox))
                 self._send(200, {"ok": True, "ids": ids})
+            elif path == "/api/instruct":
+                instruction = str(body.get("instruction", "")).strip()
+                project = str(body.get("project", "")).strip()
+                if not instruction or not project:
+                    self._send(400, {"error": "instruction and project required"})
+                    return
+                context = str(body.get("context", ""))
+                task_id = enqueue(instruction, task_type="oversee", project=project,
+                                  payload={"context": context}, inbox=str(inbox))
+                self._send(200, {"ok": True, "task_id": task_id})
             else:
                 self._send(404, {"error": "not found"})
 
@@ -226,7 +249,10 @@ def serve(host: str | None = None, port: int | None = None, *, token: str | None
         print("         The token is the only protection; keep the URL private. Stop with Ctrl-C.")
         print(f"  on this Mac:     http://127.0.0.1:{port}/?token={token}")
         print(f"  from your phone: http://{_lan_ip()}:{port}/?token={token}   (same Wi-Fi)")
-        print("  can't connect from the phone? allow incoming connections for python3 in")
+        tailnet = _tailscale_ip()
+        if tailnet:
+            print(f"  from anywhere:   http://{tailnet}:{port}/?token={token}   (Tailscale)")
+        print("  can't connect on Wi-Fi? allow incoming connections for python3 in")
         print("  System Settings -> Network -> Firewall.")
     try:
         httpd.serve_forever()
@@ -290,6 +316,13 @@ _PAGE = """<!doctype html>
   <button type="submit">Submit goal</button>
 </form>
 
+<h2>Tell the overseer</h2>
+<form id="ov-form" class="card">
+  <input type="text" id="ov-instr" placeholder="Instruction, e.g. fix the failing import" required>
+  <input type="text" id="ov-project" placeholder="project name" required>
+  <button type="submit">Send to overseer</button>
+</form>
+
 <script>
 const $ = (id) => document.getElementById(id);
 async function api(path, body) {
@@ -298,18 +331,22 @@ async function api(path, body) {
   return r.json();
 }
 function badge(t){ return `<span class="badge">${t}</span>`; }
+let STATE = {projects:{}, pending:[], escalations:[], budget:{}};
 async function refresh() {
-  const s = await api('/api/state');
-  $('spend').textContent = '$' + (s.budget.spent_usd ?? 0).toFixed(4) + ' spent';
+  STATE = await api('/api/state');
+  $('spend').textContent = '$' + (STATE.budget.spent_usd ?? 0).toFixed(4) + ' spent';
   const needs = [];
-  for (const p of s.pending) needs.push(`<div class="card"><div class="row">
-    <span class="name">${p}</span><button onclick="confirmProject('${p}')">Confirm ✓</button></div>
-    <div class="badges">${badge('ready for sign-off')}</div></div>`);
-  for (const e of s.escalations) needs.push(`<div class="card"><div class="row">
-    <span class="name">⚠ ${e.task_id}</span><span class="muted">${e.reason}</span></div>
-    <div class="cause">${e.cause||''}</div></div>`);
+  STATE.pending.forEach((p, i) => needs.push(`<div class="card"><div class="row">
+    <span class="name">${p}</span>
+    <span><button onclick="confirmProject('${p}')">Confirm ✓</button>
+    <button class="ghost" onclick="declinePending(${i})">Decline</button></span></div>
+    <div class="badges">${badge('ready for sign-off')}</div></div>`));
+  STATE.escalations.forEach((e, i) => needs.push(`<div class="card"><div class="row">
+    <span class="name">⚠ ${e.project || e.task_id}</span>
+    <button class="ghost" onclick="instructEsc(${i})">Instruct</button></div>
+    <div class="cause">${e.reason}${e.cause ? ' — ' + e.cause : ''}</div></div>`));
   $('needs').innerHTML = needs.join('') || '<p class="muted">Nothing needs you ✓</p>';
-  const ps = Object.entries(s.projects);
+  const ps = Object.entries(STATE.projects);
   $('projects').innerHTML = ps.length ? ps.map(([n,st]) => {
     const b = [];
     if (st.confirmed) b.push('done'); else if (st.pending_user) b.push('awaiting you');
@@ -320,10 +357,27 @@ async function refresh() {
   }).join('') : '<p class="muted">No projects yet.</p>';
 }
 async function confirmProject(p){ await api('/api/confirm', {project:p}); refresh(); }
+async function declinePending(i){
+  const p = STATE.pending[i];
+  const t = prompt(`Tell the overseer what to do with “${p}” instead of confirming:`);
+  if (t) { await api('/api/instruct', {project:p, instruction:t}); refresh(); }
+}
+async function instructEsc(i){
+  const e = STATE.escalations[i];
+  const p = e.project || prompt('Which project?');
+  if (!p) return;
+  const t = prompt(`Instruction for the overseer about “${p}”:`);
+  if (t) { await api('/api/instruct', {project:p, instruction:t, context:e.cause}); refresh(); }
+}
 $('goal-form').addEventListener('submit', async (ev) => {
   ev.preventDefault();
   await api('/api/goal', {goal: $('g-goal').value, project: $('g-project').value, plan: $('g-plan').checked});
   $('g-goal').value=''; refresh();
+});
+$('ov-form').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  await api('/api/instruct', {instruction: $('ov-instr').value, project: $('ov-project').value});
+  $('ov-instr').value=''; refresh();
 });
 refresh(); setInterval(refresh, 4000);
 </script>

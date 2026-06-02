@@ -8,9 +8,14 @@ questions: tests prove the work *functions*, not that it is *safe/hardened* (fin
 from __future__ import annotations
 
 import subprocess
+import sys
 from dataclasses import dataclass, field
 
 REQUIRED_GATES = ("tests", "acceptance", "judge", "user")
+
+# Use the daemon's own interpreter, never a bare "python" — on macOS only "python3" may exist
+# (the same exit-127 trap that bit agent launch). Single source of truth for the test command.
+DEFAULT_TEST_COMMAND = (sys.executable or "python3", "-m", "pytest", "-q")
 
 
 @dataclass

@@ -1,6 +1,7 @@
 """Behavioural: the Da Nang surface — durable read fold + action channels + the real entry path."""
 from __future__ import annotations
 
+import json
 import os
 import socket
 import subprocess
@@ -54,6 +55,24 @@ def test_goal_action_drops_inbox_tasks(tmp_path: Path):
 def test_plan_action_drops_one_task(tmp_path: Path):
     submit_plan("build a thing", project="demo", inbox=str(tmp_path))   # POST /api/goal {plan:true}
     assert len(list(tmp_path.glob("*.json"))) == 1
+
+
+def test_instruct_enqueues_an_oversee_task(tmp_path: Path):
+    from control.enqueue import enqueue                                  # what POST /api/instruct calls
+    enqueue("fix the import", task_type="oversee", project="demo",
+            payload={"context": "ImportError"}, inbox=str(tmp_path))
+    files = list(tmp_path.glob("*.json"))
+    assert len(files) == 1
+    data = json.loads(files[0].read_text(encoding="utf-8"))
+    assert data["task_type"] == "oversee" and data["project"] == "demo"
+    assert data["payload"]["context"] == "ImportError"
+
+
+def test_escalations_carry_project(tmp_path: Path):
+    s = EventStore(tmp_path / "e.log")
+    s.append("escalation", {"task_id": "t1", "cause": "boom", "reason": "pa:escalate", "project": "roman"})
+    out = escalations(EventStore(tmp_path / "e.log"))
+    assert out[0]["project"] == "roman"   # the overseer needs this to know which project to act on
 
 
 def test_authorised_accepts_any_valid_source_and_fails_closed():

@@ -37,11 +37,11 @@ def test_monitor_finalises_hardens_and_records(tmp_path: Path):
     resolve_project_dir(tmp_path, "demo")
     hardened = []
     tiers = [lambda pd: (hardened.append(pd) or GateResult("edge", True))]
-    finalised: set[str] = set()
-    outs = monitor_projects(repo, finalised, projects_root=str(tmp_path),
+    evaluated: dict = {}
+    outs = monitor_projects(repo, evaluated, projects_root=str(tmp_path),
                             test_command=PASS, tiers=tiers)
     assert len(outs) == 1 and outs[0].pending_user
-    assert "demo" in finalised
+    assert "demo" in evaluated
     assert hardened, "assurance loop should run on a finalised project"
     # durable pending_user status was recorded
     statuses = [e.data for e in EventStore(str(tmp_path / "e.log")).replay()
@@ -56,7 +56,7 @@ def test_monitor_finalises_hardens_and_records(tmp_path: Path):
 def test_monitor_skips_in_progress_project(tmp_path: Path):
     repo = TaskRepository(EventStore(tmp_path / "e.log"))
     repo.create(Task(task_id="b", title="build", task_type="implement", project="demo"))  # QUEUED
-    outs = monitor_projects(repo, set(), projects_root=str(tmp_path), test_command=PASS)
+    outs = monitor_projects(repo, {}, projects_root=str(tmp_path), test_command=PASS)
     assert outs == []   # not all-terminal yet
 
 
@@ -64,9 +64,9 @@ def test_monitor_finalises_each_project_once(tmp_path: Path):
     repo = TaskRepository(EventStore(tmp_path / "e.log"))
     _finished_project(repo)
     resolve_project_dir(tmp_path, "demo")
-    finalised: set[str] = set()
-    assert len(monitor_projects(repo, finalised, projects_root=str(tmp_path), test_command=PASS)) == 1
-    assert monitor_projects(repo, finalised, projects_root=str(tmp_path), test_command=PASS) == []
+    evaluated: dict = {}
+    assert len(monitor_projects(repo, evaluated, projects_root=str(tmp_path), test_command=PASS)) == 1
+    assert monitor_projects(repo, evaluated, projects_root=str(tmp_path), test_command=PASS) == []
 
 
 def test_monitor_records_failed_gates_without_hardening(tmp_path: Path):
@@ -76,7 +76,41 @@ def test_monitor_records_failed_gates_without_hardening(tmp_path: Path):
     hardened = []
     tiers = [lambda pd: (hardened.append(pd) or GateResult("edge", True))]
     # failing tests -> not pending_user -> no assurance
-    outs = monitor_projects(repo, set(), projects_root=str(tmp_path),
+    outs = monitor_projects(repo, {}, projects_root=str(tmp_path),
                             test_command=("python", "-c", "raise SystemExit(1)"), tiers=tiers)
     assert outs and not outs[0].pending_user
     assert not hardened   # assurance does not run on a project that failed its gates
+
+
+def test_superseded_failed_validate_does_not_poison_judge(tmp_path: Path):
+    """A validate that failed (e.g. during an outage) must not block the judge gate forever once a
+    fresh validate passes — otherwise a successful retry can never bring the project to the tray."""
+    repo = TaskRepository(EventStore(tmp_path / "e.log"))
+    repo.create(Task(task_id="b", title="build", task_type="implement", project="demo"))
+    repo.apply("b", Event.CLAIM)
+    repo.apply("b", Event.COMPLETE)
+    repo.create(Task(task_id="v_old", title="validate", task_type="validate", project="demo"))
+    repo.apply("v_old", Event.CLAIM)
+    repo.apply("v_old", Event.FAIL)                  # the stale failure
+    repo.create(Task(task_id="v_new", title="validate", task_type="validate", project="demo"))
+    repo.apply("v_new", Event.CLAIM)
+    repo.apply("v_new", Event.COMPLETE)              # a fresh pass supersedes it
+    resolve_project_dir(tmp_path, "demo")
+    out = evaluate_project(repo, project="demo", projects_root=str(tmp_path), test_command=PASS)
+    assert out.gates["judge"] and out.pending_user
+
+
+def test_monitor_reevaluates_when_signature_changes(tmp_path: Path):
+    """An overseer fix adds a fresh task; once it completes, the project must re-finalise (not stay
+    stuck on the first evaluation) — this is what returns an overseer-fixed project to the tray."""
+    repo = TaskRepository(EventStore(tmp_path / "e.log"))
+    _finished_project(repo)
+    resolve_project_dir(tmp_path, "demo")
+    evaluated: dict = {}
+    assert len(monitor_projects(repo, evaluated, projects_root=str(tmp_path), test_command=PASS)) == 1
+    assert monitor_projects(repo, evaluated, projects_root=str(tmp_path), test_command=PASS) == []  # unchanged
+    repo.create(Task(task_id="o", title="overseer fix", task_type="oversee", project="demo"))
+    repo.apply("o", Event.CLAIM)
+    repo.apply("o", Event.COMPLETE)
+    outs = monitor_projects(repo, evaluated, projects_root=str(tmp_path), test_command=PASS)
+    assert len(outs) == 1   # signature changed -> re-evaluated

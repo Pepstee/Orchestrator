@@ -82,13 +82,15 @@ def _handle_failure(
         task.retries += 1
         repo.apply(task.task_id, Event.REQUEUE)
     elif action == "escalate":                       # PA: known dead-end — straight to the user
-        repo.record_escalation(task.task_id, cause=result.cause or "", reason="pa:escalate")
+        repo.record_escalation(task.task_id, cause=result.cause or "", reason="pa:escalate",
+                               project=task.project)
         repo.apply(task.task_id, Event.FAIL)
     elif task.retries < task.max_retries:            # no decisive PA verdict — ordinary retry
         task.retries += 1
         repo.apply(task.task_id, Event.REQUEUE)
     else:                                            # retries exhausted — escalate
-        repo.record_escalation(task.task_id, cause=result.cause or "", reason="retries exhausted")
+        repo.record_escalation(task.task_id, cause=result.cause or "", reason="retries exhausted",
+                               project=task.project)
         repo.apply(task.task_id, Event.FAIL)
 
 
