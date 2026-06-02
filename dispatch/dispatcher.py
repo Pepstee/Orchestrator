@@ -21,6 +21,16 @@ PAConsult = Callable[[str], "str | None"]
 # Bound dynamic decomposition: a single task may spawn at most this many sub-tasks (law L6).
 MAX_SPAWNED_PER_TASK = 50
 
+# A provider usage/rate limit is transient (it resets) — not a task failure. The cause carries the
+# RateLimited marker from infra.llm (or the provider's own wording).
+_RATE_LIMIT_HINTS = ("ratelimited", "rate limit", "usage limit", "429", "quota",
+                     "too many requests", "overloaded")
+
+
+def is_rate_limited(result: AgentResult) -> bool:
+    cause = (result.cause or "").lower()
+    return bool(cause) and any(hint in cause for hint in _RATE_LIMIT_HINTS)
+
 
 def is_ready(repo: TaskRepository, task: Task) -> bool:
     """A queued task is ready when every prerequisite exists and is DONE."""
@@ -76,7 +86,10 @@ def _handle_failure(
     result: AgentResult,
     pa_consult: PAConsult | None,
 ) -> None:
-    """The failure ladder: PA fast-path -> retry -> escalate. Each branch is a single transition."""
+    """The failure ladder: rate-limit backoff -> PA fast-path -> retry -> escalate."""
+    if is_rate_limited(result):
+        repo.apply(task.task_id, Event.REQUEUE)   # transient provider limit: retry later, no penalty, no escalation
+        return
     action = pa_consult(result.cause or "") if pa_consult else None
     if action == "requeue":                          # PA: transient — retry without penalty
         task.retries += 1

@@ -19,6 +19,22 @@ class LLMResult:
     model: str
 
 
+class RateLimited(RuntimeError):
+    """Provider usage/rate limit hit — transient (resets, e.g. the Claude Max 5-hour window). The
+    caller should back off and retry, NOT treat it as a task failure."""
+
+
+_RATE_LIMIT_HINTS = (
+    "rate limit", "rate_limit", "usage limit", "429", "quota",
+    "too many requests", "overloaded", "529", "resets at", "try again later",
+)
+
+
+def _looks_rate_limited(text: str) -> bool:
+    low = (text or "").lower()
+    return any(hint in low for hint in _RATE_LIMIT_HINTS)
+
+
 def _parse_claude_output(stdout: str) -> LLMResult:
     """Parse `claude -p --output-format json` output (the shape the real CLI emits)."""
     data = json.loads(stdout)
@@ -73,7 +89,10 @@ def call_llm(
             cmd, input=full, capture_output=True, text=True, timeout=timeout, cwd=cwd
         )
         if proc.returncode != 0:
-            raise RuntimeError(f"claude exited {proc.returncode}: {(proc.stderr or '')[-300:]}")
+            raw = proc.stderr or proc.stdout or ""
+            if _looks_rate_limited(raw):
+                raise RateLimited(f"claude usage/rate limit: {raw[-300:]}")
+            raise RuntimeError(f"claude exited {proc.returncode}: {raw[-300:]}")
         return _parse_claude_output(proc.stdout)
     if provider == "openai":
         full = f"{system}\n\n{prompt}" if system else prompt
@@ -82,6 +101,9 @@ def call_llm(
             capture_output=True, text=True, timeout=timeout, cwd=cwd,
         )
         if proc.returncode != 0:
-            raise RuntimeError(f"codex exited {proc.returncode}: {(proc.stderr or '')[-300:]}")
+            raw = proc.stderr or proc.stdout or ""
+            if _looks_rate_limited(raw):
+                raise RateLimited(f"codex usage/rate limit: {raw[-300:]}")
+            raise RuntimeError(f"codex exited {proc.returncode}: {raw[-300:]}")
         return _parse_codex_output(proc.stdout)
     raise ValueError(f"unknown provider {provider!r}")

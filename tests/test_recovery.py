@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from control.budget import BudgetGovernor
+from control.loop import run as run_loop
 from core.models import AgentResult, Event, Task, TaskStatus
 from dispatch.dispatcher import propagate_prerequisite_failures, run_until_idle
 from dispatch.repository import TaskRepository
@@ -56,3 +58,23 @@ def test_propagate_leaves_healthy_graphs_untouched(tmp_path: Path):
     repo.create(Task(task_id="x", title="x", task_type="implement"))   # QUEUED, no failed deps
     assert propagate_prerequisite_failures(repo) == 0
     assert repo.get("x").status == TaskStatus.QUEUED
+
+
+def test_rate_limit_backs_off_and_requeues_without_penalty(tmp_path: Path):
+    """A provider usage/rate limit must NOT fail or escalate the task — it requeues unpenalised, the
+    loop backs off, and the batch ends (no hammering). Resumes next cycle when the window resets."""
+    repo = TaskRepository(EventStore(tmp_path / "e.log"))
+    repo.create(Task(task_id="t", title="t", task_type="implement", max_retries=3))
+    gov = BudgetGovernor(EventStore(tmp_path / "b.log"), cap_usd=0.0, kill_switch_path=tmp_path / "KILL")
+    calls = {"invoke": 0, "backoff": 0}
+
+    def invoke(_t: Task) -> AgentResult:
+        calls["invoke"] += 1
+        return AgentResult(ok=False, summary="limited", cause="RateLimited: claude usage/rate limit: resets at ...")
+
+    run_loop(repo, invoke, gov, max_steps=10, backoff=lambda: calls.__setitem__("backoff", calls["backoff"] + 1))
+
+    assert calls["backoff"] == 1                       # backed off once
+    assert calls["invoke"] == 1                        # ended the batch — did NOT hammer the limited API
+    assert repo.get("t").status == TaskStatus.QUEUED   # requeued, not failed/escalated
+    assert repo.get("t").retries == 0                  # no retry penalty for a transient limit

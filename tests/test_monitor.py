@@ -100,6 +100,50 @@ def test_superseded_failed_validate_does_not_poison_judge(tmp_path: Path):
     assert out.gates["judge"] and out.pending_user
 
 
+def test_status_summary_reads_projects(tmp_path: Path):
+    from control.daemon import _status_summary
+    repo = TaskRepository(EventStore(tmp_path / "e.log"))
+    repo.create(Task(task_id="a", title="a", task_type="implement", project="proj"))
+    repo.apply("a", Event.CLAIM)
+    repo.apply("a", Event.COMPLETE)
+    repo.create(Task(task_id="b", title="b", task_type="implement", project="proj"))
+    s = _status_summary(repo)
+    assert "proj" in s and "1/2" in s   # 1 of 2 done
+
+
+def test_monitor_replans_when_gates_unmet_and_under_cap(tmp_path: Path):
+    """A drained project with unmet gates must re-invoke the planner for the next increment (the
+    replan loop), not stop after one cycle."""
+    repo = TaskRepository(EventStore(tmp_path / "e.log"))
+    repo.create(Task(task_id="p", title="Build X", task_type="plan", project="demo"))
+    repo.apply("p", Event.CLAIM)
+    repo.apply("p", Event.COMPLETE)
+    repo.create(Task(task_id="b", title="impl", task_type="implement", project="demo"))
+    repo.apply("b", Event.CLAIM)
+    repo.apply("b", Event.FAIL)                       # build failed -> acceptance gate unmet
+    resolve_project_dir(tmp_path, "demo")
+    monitor_projects(repo, {}, projects_root=str(tmp_path), test_command=PASS,
+                     tiers=[lambda _d: GateResult("t", True)])
+    plans = [t for t in repo.list() if t.project == "demo" and t.task_type == "plan"]
+    assert len(plans) == 2                            # planner re-invoked for the next increment
+
+
+def test_monitor_escalates_when_planner_done_but_gates_unmet(tmp_path: Path):
+    """If the planner has nothing left to add but the gates still aren't met, stop re-planning and
+    escalate (stuck) rather than loop forever."""
+    repo = TaskRepository(EventStore(tmp_path / "e.log"))
+    repo.create(Task(task_id="p", title="Build X", task_type="plan", project="demo"))
+    repo.apply("p", Event.CLAIM)
+    repo.apply("p", Event.COMPLETE)                   # plan done, nothing spawned after -> planner done
+    resolve_project_dir(tmp_path, "demo")
+    monitor_projects(repo, {}, projects_root=str(tmp_path), test_command=PASS,
+                     tiers=[lambda _d: GateResult("t", True)])
+    plans = [t for t in repo.list() if t.project == "demo" and t.task_type == "plan"]
+    assert len(plans) == 1                            # did NOT re-plan
+    esc = [e.data for e in EventStore(str(tmp_path / "e.log")).replay() if e.kind == "escalation"]
+    assert esc and esc[-1]["project"] == "demo"       # escalated as stuck
+
+
 def test_monitor_reevaluates_when_signature_changes(tmp_path: Path):
     """An overseer fix adds a fresh task; once it completes, the project must re-finalise (not stay
     stuck on the first evaluation) — this is what returns an overseer-fixed project to the tray."""

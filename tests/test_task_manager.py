@@ -55,9 +55,25 @@ def test_run_decomposes_into_wired_spawned_tasks():
     assert review["depends_on"] == [build["task_id"]]   # index 0 rewired to the build's id
 
 
-def test_run_empty_plan_fails():
+def test_run_empty_plan_signals_done():
+    # Empty plan is NOT a failure now — it's how the incremental loop terminates (goal met).
     def fake(*_a, **_k):
         return LLMResult(text="[]", cost_usd=0.0, model="sonnet")
 
     r = run(_plan_task(), call=fake)
-    assert not r.ok and r.cause
+    assert r.ok and r.spawned_tasks == [] and r.metadata.get("planner_done") is True
+
+
+def test_run_uses_current_state_for_replan():
+    seen = {}
+
+    def fake(provider, model, prompt, system=None, **_):
+        seen["prompt"] = prompt
+        return LLMResult(text='[{"title":"fix the import","task_type":"implement"}]', cost_usd=0.01, model=model)
+
+    payload = {"task": Task(task_id="p2", title="Build a thing", task_type="plan", project="demo",
+                            payload={"state": {"failed": [{"title": "config", "cause": "ImportError: missing"}],
+                                               "done": ["scaffold"], "files": ["app.py"]}}).to_dict()}
+    r = run(payload, call=fake)
+    assert r.ok and len(r.spawned_tasks) == 1
+    assert "FAILED" in seen["prompt"] and "ImportError" in seen["prompt"]   # failures fed back for replan

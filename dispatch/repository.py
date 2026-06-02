@@ -72,6 +72,15 @@ class TaskRepository:
             {"task_id": task_id, "cause": cause, "reason": reason, "project": project},
         )
 
+    def last_results(self) -> dict[str, dict]:
+        """task_id -> the latest {ok, cause, summary} (the planner reads failure causes to replan)."""
+        out: dict[str, dict] = {}
+        for ev in self._store.replay():
+            if ev.kind == "task_result":
+                out[ev.data["task_id"]] = {"ok": ev.data.get("ok"), "cause": ev.data.get("cause"),
+                                           "summary": ev.data.get("summary")}
+        return out
+
     def failure_causes(self) -> list[str]:
         """Every recorded failure cause (the overseer mines these to evolve the PA)."""
         return [

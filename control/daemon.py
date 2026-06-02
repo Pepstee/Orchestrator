@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import signal
 import time
+import uuid
 from pathlib import Path
 from typing import Callable
 
@@ -23,7 +24,7 @@ from control.confirm import ingest_confirmations
 from control.inbox import ingest
 from control.loop import run as run_loop
 from control.project import DEFAULT_TEST_COMMAND, ProjectOutcome, evaluate_project
-from core.models import TaskStatus
+from core.models import Task, TaskStatus
 from dispatch.dispatcher import Invoke, PAConsult, propagate_prerequisite_failures
 from dispatch.repository import TaskRepository
 from dispatch.runner import make_subprocess_invoke
@@ -46,6 +47,57 @@ def _signature(repo: TaskRepository, project: str) -> frozenset:
     return frozenset((t.task_id, t.status.value) for t in repo.list() if t.project == project)
 
 
+# Safety bound on the replan loop (L6): at most this many planning passes per project. The NORMAL
+# stop is the gates passing; this only stops a project that never converges.
+MAX_PLAN_ITERATIONS = 20
+
+# Heartbeat: ping a status summary at least this often, regardless of progress.
+HEARTBEAT_SECONDS = 12 * 3600
+
+
+def _status_summary(repo: TaskRepository) -> str:
+    by_project: dict[str, list] = {}
+    for t in repo.list():
+        by_project.setdefault(t.project, []).append(t.status)
+    if not by_project:
+        return "orchestrator running — no projects yet"
+    parts = [f"{p} {sum(1 for s in sts if s == TaskStatus.DONE)}/{len(sts)}"
+             for p, sts in sorted(by_project.items())]
+    return f"{len(by_project)} project(s): " + "; ".join(parts[:8])
+
+
+def _planner_done(repo: TaskRepository, project: str) -> bool:
+    """True if the most recent plan task completed but spawned no further work (the planner judged
+    the goal met / had nothing to add) — so re-planning again would be pointless."""
+    proj = [t for t in repo.list() if t.project == project]
+    plans = [t for t in proj if t.task_type == "plan"]
+    if not plans or plans[-1].status != TaskStatus.DONE:
+        return False
+    idx = proj.index(plans[-1])
+    return not any(t.task_type != "plan" for t in proj[idx + 1:])
+
+
+def _project_state(repo: TaskRepository, project: str, root: Path) -> dict:
+    """The current state the planner reasons over: goal, acceptance, done steps, failures+causes, files."""
+    proj = [t for t in repo.list() if t.project == project]
+    goal = next((t.title for t in proj if t.task_type == "plan"), project)
+    acceptance = next((list(t.acceptance_criteria) for t in proj
+                       if t.task_type == "plan" and t.acceptance_criteria), [])
+    results = repo.last_results()
+    done = [t.title for t in proj if t.status == TaskStatus.DONE and t.task_type != "plan"]
+    failed = [{"title": t.title, "cause": (results.get(t.task_id, {}).get("cause") or "")}
+              for t in proj if t.status == TaskStatus.FAILED]
+    files: list[str] = []
+    try:
+        pdir = resolve_project_dir(root, project)
+        files = sorted(str(p.relative_to(pdir)) for p in pdir.rglob("*")
+                       if p.is_file() and "__pycache__" not in p.parts)[:60]
+    except (OSError, ValueError):
+        pass
+    return {"goal": goal, "acceptance": acceptance,
+            "state": {"done": done, "failed": failed, "files": files}}
+
+
 def monitor_projects(
     repo: TaskRepository,
     evaluated: dict[str, frozenset],
@@ -56,10 +108,12 @@ def monitor_projects(
     tiers: list[Tier] | None = None,
     should_stop: Callable[[], bool] = lambda: False,
 ) -> list[ProjectOutcome]:
-    """For each project whose graph is fully terminal: if its task signature has changed since the
-    last evaluation (so an overseer fix re-opens it), evaluate the gates, record the status durably,
-    and — if it passed the automated gates — run the assurance loop."""
+    """For each drained project (graph fully terminal, signature changed): evaluate the gates, then
+    either finalise (3/4 gates -> pending_user: ping + harden, don't stop), RE-PLAN (gates unmet and
+    under the iteration cap -> ask the planner for the next increment, feeding back failures), or
+    escalate (planner done / cap reached but gates unmet -> the project is stuck)."""
     tiers = tiers if tiers is not None else hardening_tiers(governor)
+    root = Path(projects_root) if projects_root else default_projects_root()
     outcomes: list[ProjectOutcome] = []
     for project in sorted({t.project for t in repo.list()}):
         if not _all_terminal(repo, project):
@@ -67,18 +121,32 @@ def monitor_projects(
         sig = _signature(repo, project)
         if evaluated.get(project) == sig:
             continue                                  # unchanged since last evaluation — skip
+        evaluated[project] = sig
         outcome = evaluate_project(repo, project=project, projects_root=projects_root,
                                    test_command=test_command)
-        evaluated[project] = sig
         repo.record_project_status(project, gates=outcome.gates, pending_user=outcome.pending_user)
-        if outcome.pending_user:
-            notify("Orchestrator", f"{project} is ready for your confirmation")  # the Da Nang nudge
-            root = Path(projects_root) if projects_root else default_projects_root()
+        outcomes.append(outcome)
+
+        if outcome.pending_user:                      # 3/4 gates -> instant ping, keep hardening
+            notify("Orchestrator", f"{project} is ready for your confirmation")
             assurance = run_assurance(str(resolve_project_dir(root, project)), tiers,
                                       should_stop=should_stop, governor=governor)
             repo.record_assurance(project, fully_hardened=assurance.fully_hardened,
                                   reason=assurance.stopped_reason)
-        outcomes.append(outcome)
+            continue
+
+        # Gates unmet: advance the project — re-invoke the planner for the next increment (replan),
+        # unless it's done planning or we've hit the safety cap, in which case it's stuck.
+        plan_passes = sum(1 for t in repo.list() if t.project == project and t.task_type == "plan")
+        if plan_passes >= MAX_PLAN_ITERATIONS or _planner_done(repo, project):
+            repo.record_escalation(f"{project}:stuck", cause="gates unmet; planner finished or cap reached",
+                                   reason="needs you", project=project)
+            notify("Orchestrator", f"{project} needs you — stuck before completion")
+        else:
+            st = _project_state(repo, project, root)
+            repo.create(Task(task_id=uuid.uuid4().hex[:12], title=st["goal"], task_type="plan",
+                             project=project, acceptance_criteria=st["acceptance"],
+                             payload={"state": st["state"]}))   # next planning pass (the replan loop)
     return outcomes
 
 
@@ -138,6 +206,7 @@ def main() -> None:
 
     evaluated: dict[str, frozenset] = {}
     pa_path = state / "pa_rules.json"
+    heartbeat = {"last": time.time()}
 
     def on_cycle() -> None:
         ingest_confirmations(repo)   # apply any user confirmations (the fourth gate)
@@ -145,6 +214,9 @@ def main() -> None:
         rules = load_rules(pa_path)  # overseer evolves the PA from recurring failures (curated)
         evolve_pa(rules, repo.failure_causes())
         save_rules(pa_path, rules)
+        if time.time() - heartbeat["last"] >= HEARTBEAT_SECONDS:   # 12h status ping, regardless of progress
+            notify("Orchestrator", _status_summary(repo))
+            heartbeat["last"] = time.time()
 
     def pa_consult(cause: str) -> str | None:
         return consult(cause, load_rules(pa_path))   # live fast-path over the active PA rules

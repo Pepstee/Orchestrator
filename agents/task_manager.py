@@ -1,9 +1,13 @@
-"""agents.task_manager — decompose a goal into a wired graph of sub-tasks (dynamic decomposition).
+"""agents.task_manager — the INCREMENTAL planner (recreating the v1 behaviour that kept working).
 
-The 'real' Task Manager: an LLM turns a goal into the smallest ordered set of concrete steps that
-completes it, ending with a validation step. Steps are returned as spawned_tasks; the dispatcher
-enqueues them (bounded by L6). depends_on is expressed by index into the plan and rewired to task
-ids here. The LLM call is injected, so the decomposition logic is testable without spending tokens.
+Given the goal and the CURRENT state of the project (files built, steps done, steps failed with
+their causes), it emits only the NEXT small batch of steps — not a big-bang decomposition of the
+whole project up front (that behaves unpredictably: it routed test-writing to the judge and
+dead-ended). The daemon re-invokes this whenever a project's queue drains and the goal isn't met
+yet, feeding back what happened — so the project advances over iterations (the replan loop) instead
+of stopping after one cycle. It outputs [] when the goal is fully met (how the loop terminates).
+
+The LLM call is injected, so the planning logic is testable without spending tokens.
 """
 from __future__ import annotations
 
@@ -18,34 +22,48 @@ from infra.llm import LLMResult, call_llm
 from registry.agents import model_for
 
 SYSTEM_PROMPT = (
-    "You are the task manager in an autonomous orchestrator. Decompose the goal into the SMALLEST "
-    "ordered set of concrete, independently-checkable steps that completes it, ending with a "
-    "validation step. Output ONLY a JSON array of steps."
+    "You are the task manager in an autonomous orchestrator. You plan INCREMENTALLY: given the goal "
+    "and the current project state, output ONLY the NEXT small batch of concrete, "
+    "independently-checkable steps — never the whole project at once. Fix failures first. Every "
+    "implement step writes its OWN tests; validate steps are review-only — NEVER create a separate "
+    "test-writing step typed 'validate'. Output ONLY a JSON array, or [] when the goal is fully met."
 )
 
 LLMCall = Callable[..., LLMResult]
 
 
-def build_prompt(goal: str) -> str:
-    return (
-        f"Goal: {goal}\n\n"
-        "Output ONLY a JSON array of steps. Each step is:\n"
+def build_prompt(goal: str, acceptance: list[str] | None = None, state: dict | None = None) -> str:
+    state = state or {}
+    parts = [f"Goal: {goal}"]
+    if acceptance:
+        parts.append("Acceptance criteria:\n" + "\n".join(f"- {c}" for c in acceptance))
+    files = state.get("files") or []
+    done = state.get("done") or []
+    failed = state.get("failed") or []
+    if files:
+        parts.append("Files already in the project:\n" + "\n".join(f"- {f}" for f in files[:60]))
+    if done:
+        parts.append("Steps already completed:\n" + "\n".join(f"- {t}" for t in done[:40]))
+    if failed:
+        parts.append("Steps that FAILED — fix these FIRST:\n"
+                     + "\n".join((f"- {f.get('title', '')}: {f.get('cause', '')}")[:200] for f in failed[:20]))
+    parts.append(
+        "Output ONLY a JSON array of the NEXT 1-5 steps (fix failures first, then the next "
+        "increment toward the goal). Every implement step MUST write its own tests; validate steps "
+        "are review-only. Output [] if the goal is fully met and nothing remains. Each step:\n"
         '  {"title": str, "task_type": "implement"|"validate", "acceptance": [str], "depends_on": [int]}\n'
-        "depends_on lists indices of earlier steps in this array. Keep it minimal; end with a validate step."
+        "depends_on lists indices within THIS array."
     )
+    return "\n\n".join(parts)
 
 
 def parse_plan(text: str) -> list[dict]:
-    """Extract the step array, tolerating markdown fences and surrounding prose.
-
-    Real LLM output often wraps the array in ```json fences or chatty text, so we strip fences and
-    try the outermost [ ... ] slice before falling back to the whole cleaned text.
-    """
+    """Extract the step array, tolerating markdown fences and surrounding prose."""
     cleaned = re.sub(r"```(?:json)?", " ", text)
     candidates: list[str] = []
     start, end = cleaned.find("["), cleaned.rfind("]")
     if 0 <= start < end:
-        candidates.append(cleaned[start:end + 1])   # outermost [ ... ]
+        candidates.append(cleaned[start:end + 1])
     candidates.append(cleaned)
     for blob in candidates:
         try:
@@ -59,15 +77,20 @@ def parse_plan(text: str) -> list[dict]:
 
 def run(payload: dict, call: LLMCall = call_llm) -> AgentResult:
     task = Task.from_dict(payload.get("task", {}))
+    state = task.payload.get("state") if isinstance(task.payload, dict) else None
     spec = model_for("task_manager")
     try:
-        res = call(spec["provider"], spec["model"], build_prompt(task.title), system=SYSTEM_PROMPT)
+        res = call(spec["provider"], spec["model"],
+                   build_prompt(task.title, task.acceptance_criteria, state), system=SYSTEM_PROMPT)
     except Exception as exc:
         return AgentResult(ok=False, summary="task manager call failed", cause=f"{type(exc).__name__}: {exc}")
 
     steps = parse_plan(res.text)
     if not steps:
-        return AgentResult(ok=False, summary="empty plan", cause="task manager produced no parseable steps")
+        # The planner judged the goal complete (or had nothing to add). NOT a failure — this is how
+        # the replan loop terminates; the daemon reads planner_done to stop iterating.
+        return AgentResult(ok=True, summary="planner: no further tasks", spawned_tasks=[],
+                           metadata={"cost_usd": res.cost_usd, "planner_done": True})
 
     ids = [uuid.uuid4().hex[:12] for _ in steps]
     spawned = []
@@ -85,7 +108,7 @@ def run(payload: dict, call: LLMCall = call_llm) -> AgentResult:
 
     return AgentResult(
         ok=True,
-        summary=f"decomposed {task.title[:60]!r} into {len(spawned)} steps",
+        summary=f"planned {len(spawned)} next task(s)",
         spawned_tasks=spawned,
         metadata={"cost_usd": res.cost_usd},
     )
