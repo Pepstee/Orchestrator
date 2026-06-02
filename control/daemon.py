@@ -12,6 +12,7 @@ no auto-restart, so a soft-stop cannot resurrect it.
 """
 from __future__ import annotations
 
+import json
 import os
 import signal
 import time
@@ -51,6 +52,11 @@ def _signature(repo: TaskRepository, project: str) -> frozenset:
 # stop is the gates passing; this only stops a project that never converges.
 MAX_PLAN_ITERATIONS = 20
 
+# When the planner is out of moves but the gates still fail, the OVERSEER steps in to diagnose and
+# fix (run the tests, repair the code) rather than letting the project stall. Bounded (L6): after
+# this many overseer interventions with the gates still unmet, escalate to the user.
+MAX_OVERSEER_INTERVENTIONS = 3
+
 # Heartbeat: ping a status summary at least this often, regardless of progress.
 HEARTBEAT_SECONDS = 12 * 3600
 
@@ -74,7 +80,8 @@ def _planner_done(repo: TaskRepository, project: str) -> bool:
     if not plans or plans[-1].status != TaskStatus.DONE:
         return False
     idx = proj.index(plans[-1])
-    return not any(t.task_type != "plan" for t in proj[idx + 1:])
+    # Only builder/validator work counts as planner progress — overseer interventions don't.
+    return not any(t.task_type in ("implement", "validate") for t in proj[idx + 1:])
 
 
 def _project_state(repo: TaskRepository, project: str, root: Path) -> dict:
@@ -135,18 +142,32 @@ def monitor_projects(
                                   reason=assurance.stopped_reason)
             continue
 
-        # Gates unmet: advance the project — re-invoke the planner for the next increment (replan),
-        # unless it's done planning or we've hit the safety cap, in which case it's stuck.
+        # Gates unmet — advance the project, escalating to the user only as the LAST resort:
+        #   1. planner still has moves      -> replan (next increment)
+        #   2. planner spent, overseer left -> the overseer diagnoses + fixes (don't stall)
+        #   3. both spent                   -> escalate (genuinely stuck)
         plan_passes = sum(1 for t in repo.list() if t.project == project and t.task_type == "plan")
-        if plan_passes >= MAX_PLAN_ITERATIONS or _planner_done(repo, project):
-            repo.record_escalation(f"{project}:stuck", cause="gates unmet; planner finished or cap reached",
-                                   reason="needs you", project=project)
-            notify("Orchestrator", f"{project} needs you — stuck before completion")
-        else:
-            st = _project_state(repo, project, root)
+        oversee_passes = sum(1 for t in repo.list() if t.project == project and t.task_type == "oversee")
+        planner_spent = plan_passes >= MAX_PLAN_ITERATIONS or _planner_done(repo, project)
+        st = _project_state(repo, project, root)
+        if not planner_spent:
             repo.create(Task(task_id=uuid.uuid4().hex[:12], title=st["goal"], task_type="plan",
                              project=project, acceptance_criteria=st["acceptance"],
                              payload={"state": st["state"]}))   # next planning pass (the replan loop)
+        elif oversee_passes < MAX_OVERSEER_INTERVENTIONS:
+            instruction = (
+                f"This project has STALLED — the automated gates are not all passing (gates={outcome.gates}) "
+                "and the planner has no further steps. Run the test suite, find why it fails, fix the code "
+                "so the tests pass and the goal is met, then it will be re-validated."
+            )
+            repo.create(Task(task_id=uuid.uuid4().hex[:12], title=instruction, task_type="oversee",
+                             project=project, acceptance_criteria=st["acceptance"],
+                             payload={"context": json.dumps(st["state"])}))   # overseer steps in (L6-bounded)
+            notify("Orchestrator", f"{project} stalled — overseer stepping in")
+        else:
+            repo.record_escalation(f"{project}:stuck", cause="gates unmet; planner and overseer both exhausted",
+                                   reason="needs you", project=project)
+            notify("Orchestrator", f"{project} needs you — overseer couldn't unstick it")
     return outcomes
 
 

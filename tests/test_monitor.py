@@ -128,20 +128,36 @@ def test_monitor_replans_when_gates_unmet_and_under_cap(tmp_path: Path):
     assert len(plans) == 2                            # planner re-invoked for the next increment
 
 
-def test_monitor_escalates_when_planner_done_but_gates_unmet(tmp_path: Path):
-    """If the planner has nothing left to add but the gates still aren't met, stop re-planning and
-    escalate (stuck) rather than loop forever."""
+def test_monitor_overseer_steps_in_when_planner_stalls(tmp_path: Path):
+    """When the planner is out of moves but the gates still fail, the OVERSEER is dispatched to fix it
+    — NOT escalated to the user (that's the last resort)."""
     repo = TaskRepository(EventStore(tmp_path / "e.log"))
     repo.create(Task(task_id="p", title="Build X", task_type="plan", project="demo"))
     repo.apply("p", Event.CLAIM)
-    repo.apply("p", Event.COMPLETE)                   # plan done, nothing spawned after -> planner done
+    repo.apply("p", Event.COMPLETE)                   # plan done, no builder/validator work after -> planner spent
     resolve_project_dir(tmp_path, "demo")
     monitor_projects(repo, {}, projects_root=str(tmp_path), test_command=PASS,
                      tiers=[lambda _d: GateResult("t", True)])
-    plans = [t for t in repo.list() if t.project == "demo" and t.task_type == "plan"]
-    assert len(plans) == 1                            # did NOT re-plan
+    oversee = [t for t in repo.list() if t.project == "demo" and t.task_type == "oversee"]
+    esc = [e for e in EventStore(str(tmp_path / "e.log")).replay() if e.kind == "escalation"]
+    assert len(oversee) == 1 and not esc              # overseer dispatched, user NOT escalated
+
+
+def test_monitor_escalates_only_after_overseer_exhausted(tmp_path: Path):
+    """Escalate to the user only once the planner AND the overseer (cap) are both spent."""
+    repo = TaskRepository(EventStore(tmp_path / "e.log"))
+    repo.create(Task(task_id="p", title="Build X", task_type="plan", project="demo"))
+    repo.apply("p", Event.CLAIM)
+    repo.apply("p", Event.COMPLETE)
+    for i in range(3):                                # 3 overseer interventions already spent (the cap)
+        repo.create(Task(task_id=f"o{i}", title="fix", task_type="oversee", project="demo"))
+        repo.apply(f"o{i}", Event.CLAIM)
+        repo.apply(f"o{i}", Event.FAIL)
+    resolve_project_dir(tmp_path, "demo")
+    monitor_projects(repo, {}, projects_root=str(tmp_path), test_command=PASS,
+                     tiers=[lambda _d: GateResult("t", True)])
     esc = [e.data for e in EventStore(str(tmp_path / "e.log")).replay() if e.kind == "escalation"]
-    assert esc and esc[-1]["project"] == "demo"       # escalated as stuck
+    assert esc and esc[-1]["project"] == "demo"       # now escalated — both planner and overseer spent
 
 
 def test_monitor_reevaluates_when_signature_changes(tmp_path: Path):
