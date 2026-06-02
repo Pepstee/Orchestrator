@@ -51,7 +51,7 @@ def test_dependent_not_run_when_prereq_fails(tmp_path: Path):
 
     run_until_idle(repo, invoke)
     assert repo.get("a").status == TaskStatus.FAILED
-    assert repo.get("b").status == TaskStatus.QUEUED   # never became ready
+    assert repo.get("b").status == TaskStatus.FAILED   # never ran; cascaded from a's failure (not stranded)
 
 
 def test_run_one_enqueues_bounded_spawned_tasks(tmp_path: Path):

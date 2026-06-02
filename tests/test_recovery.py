@@ -3,7 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from core.models import Event, Task, TaskStatus
+from core.models import AgentResult, Event, Task, TaskStatus
+from dispatch.dispatcher import propagate_prerequisite_failures, run_until_idle
 from dispatch.repository import TaskRepository
 from infra.event_store import EventStore
 
@@ -27,3 +28,31 @@ def test_reclaim_is_a_noop_with_nothing_in_flight(tmp_path: Path):
     repo.apply("a", Event.COMPLETE)                    # terminal, not in-flight
     assert repo.reclaim_orphans() == 0
     assert repo.get("a").status == TaskStatus.DONE
+
+
+def _fail(_t: Task) -> AgentResult:
+    return AgentResult(ok=False, summary="nope", cause="boom")
+
+
+def test_prerequisite_failure_cascades_transitively(tmp_path: Path):
+    """A fails -> B (dep A) and C (dep B) can never run; they must cascade to FAILED, not strand the
+    project as non-terminal forever (the overnight-run stall)."""
+    repo = TaskRepository(EventStore(tmp_path / "e.log"))
+    repo.create(Task(task_id="a", title="a", task_type="implement", max_retries=0))
+    repo.create(Task(task_id="b", title="b", task_type="implement", depends_on=["a"]))
+    repo.create(Task(task_id="c", title="c", task_type="validate", depends_on=["b"]))
+    run_until_idle(repo, _fail)                        # a fails; run_until_idle then cascades
+    assert repo.get("a").status == TaskStatus.FAILED
+    assert repo.get("b").status == TaskStatus.FAILED   # cascaded
+    assert repo.get("c").status == TaskStatus.FAILED   # cascaded transitively
+    # the cascade is self-explaining (L10)
+    causes = [e.data["cause"] for e in EventStore(str(tmp_path / "e.log")).replay()
+              if e.kind == "task_result" and not e.data.get("ok") and "prerequisite" in str(e.data.get("cause"))]
+    assert causes
+
+
+def test_propagate_leaves_healthy_graphs_untouched(tmp_path: Path):
+    repo = TaskRepository(EventStore(tmp_path / "e.log"))
+    repo.create(Task(task_id="x", title="x", task_type="implement"))   # QUEUED, no failed deps
+    assert propagate_prerequisite_failures(repo) == 0
+    assert repo.get("x").status == TaskStatus.QUEUED

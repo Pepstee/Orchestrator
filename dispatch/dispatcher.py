@@ -94,6 +94,33 @@ def _handle_failure(
         repo.apply(task.task_id, Event.FAIL)
 
 
+def propagate_prerequisite_failures(repo: TaskRepository) -> int:
+    """Cascade-fail any task whose prerequisite has FAILED — it can never become ready, so leaving it
+    QUEUED forever freezes the whole project as non-terminal (the overnight-run stall). Marks such
+    tasks FAILED with a self-explaining cause (L10), iterating to a fixpoint for transitive chains.
+    Returns the count cascaded."""
+    total = 0
+    while True:
+        failed = {t.task_id for t in repo.list() if t.status == TaskStatus.FAILED}
+        cascaded = 0
+        for task in repo.list():
+            if task.status not in (TaskStatus.QUEUED, TaskStatus.BLOCKED):
+                continue
+            blockers = [d for d in task.depends_on if d in failed]
+            if not blockers:
+                continue
+            if task.status == TaskStatus.QUEUED:
+                repo.apply(task.task_id, Event.BLOCK)        # QUEUED -> BLOCKED
+            repo.apply(task.task_id, Event.FAIL)             # BLOCKED -> FAILED (prerequisite cascade)
+            repo.record_result(task.task_id, AgentResult(
+                ok=False, summary="prerequisite failed",
+                cause=f"prerequisite failed: {blockers}"))
+            cascaded += 1
+        total += cascaded
+        if cascaded == 0:
+            return total
+
+
 def run_until_idle(
     repo: TaskRepository,
     invoke: Invoke,
@@ -101,10 +128,12 @@ def run_until_idle(
     *,
     pa_consult: PAConsult | None = None,
 ) -> int:
-    """Run ready tasks until none remain (or max_steps). Returns the count processed."""
+    """Run ready tasks until none remain (or max_steps), then cascade any prerequisite failures so a
+    stranded graph terminates instead of hanging. Returns the count processed."""
     processed = 0
     while processed < max_steps:
         if run_one(repo, invoke, pa_consult=pa_consult) is None:
             break
         processed += 1
+    propagate_prerequisite_failures(repo)
     return processed

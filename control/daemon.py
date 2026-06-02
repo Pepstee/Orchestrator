@@ -24,7 +24,7 @@ from control.inbox import ingest
 from control.loop import run as run_loop
 from control.project import DEFAULT_TEST_COMMAND, ProjectOutcome, evaluate_project
 from core.models import TaskStatus
-from dispatch.dispatcher import Invoke, PAConsult
+from dispatch.dispatcher import Invoke, PAConsult, propagate_prerequisite_failures
 from dispatch.repository import TaskRepository
 from dispatch.runner import make_subprocess_invoke
 from infra import pidlock
@@ -100,6 +100,7 @@ def serve(
     while not should_stop():
         ingest(repo, inbox)
         processed = run_loop(repo, invoke, governor, max_steps=batch, pa_consult=pa_consult)
+        propagate_prerequisite_failures(repo)   # don't let a few failures strand the rest of the graph
         total += processed
         if on_cycle is not None:
             on_cycle()

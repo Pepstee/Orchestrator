@@ -22,5 +22,13 @@ def test_model_for_resolves_every_agent():
 
 
 def test_judge_provider_differs_from_builder():
-    # F5 anti-collusion: the judge must be a different provider from the builder.
+    # F5 anti-collusion: the canonical default judge must be a different provider from the builder.
     assert reg.AGENT_MODELS["judge"]["provider"] != reg.AGENT_MODELS["builder"]["provider"]
+
+
+def test_env_override_reroutes_an_agent_reversibly(monkeypatch):
+    # Provider-outage escape hatch: AGENTIC_<AGENT>="provider:model" reroutes one agent, no code edit.
+    monkeypatch.setenv("AGENTIC_JUDGE", "claude:opus")
+    assert reg.model_for("judge") == {"provider": "claude", "model": "opus"}
+    monkeypatch.delenv("AGENTIC_JUDGE")
+    assert reg.model_for("judge") == reg.AGENT_MODELS["judge"]   # default restored (still cross-provider)

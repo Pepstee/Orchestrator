@@ -9,6 +9,7 @@ not a standalone agent (resisting v1's agent proliferation).
 """
 from __future__ import annotations
 
+import os
 import sys
 
 # Launch agents with the SAME interpreter running the orchestrator — guarantees it exists
@@ -50,8 +51,17 @@ AGENT_MODELS: dict[str, dict[str, str]] = {
 
 
 def model_for(agent: str) -> dict[str, str]:
-    """The canonical model for an agent. Raise loudly on an unknown agent (no silent default)."""
+    """The canonical model for an agent, with a reversible per-agent env override for provider
+    outages. Set ``AGENTIC_<AGENT>="provider:model"`` to reroute one agent without editing code —
+    e.g. ``AGENTIC_JUDGE=claude:opus`` when Codex usage is exhausted (a month at a time). The
+    registry above stays the canonical cross-provider default (F5); drop the env var to restore it.
+    Raises loudly on an unknown agent (no silent default)."""
     try:
-        return AGENT_MODELS[agent]
-    except KeyError as exc:  # noqa: F841
+        spec = AGENT_MODELS[agent]
+    except KeyError:
         raise KeyError(f"{agent!r} has no model in the registry (registry.agents.AGENT_MODELS)") from None
+    override = os.environ.get(f"AGENTIC_{agent.upper()}", "")
+    if ":" in override:
+        provider, model = override.split(":", 1)
+        return {"provider": provider.strip(), "model": model.strip()}
+    return spec
