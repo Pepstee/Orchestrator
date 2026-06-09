@@ -11,7 +11,12 @@ from typing import Callable
 
 from core.models import AgentResult, Event, Task, TaskStatus
 from dispatch.repository import MAX_TRANSIENT_REQUEUES, TaskRepository
-from infra.llm import RATE_LIMIT_HINTS, is_transient_cause   # single source of limit/transient classification
+from infra.triage import (   # the single failure taxonomy (manifest B1; one source, L1)
+    ErrorClass,
+    RATE_LIMIT_HINTS,
+    classify,
+    is_transient_cause,
+)
 
 # An invoke takes a task and returns its AgentResult (subprocess agent, or a test stub).
 Invoke = Callable[[Task], AgentResult]
@@ -102,11 +107,18 @@ def _handle_failure(
     result: AgentResult,
     pa_consult: PAConsult | None,
 ) -> None:
-    """The failure ladder: transient requeue (BUDGETED) -> PA fast-path -> retry -> escalate.
-    Every rung is bounded by DURABLE counters (BG-3): record_result counted this failure off the
-    event log before we got here, so no budget can be laundered by a restart."""
-    if is_transient(result) and repo.transient_count(task.task_id) <= MAX_TRANSIENT_REQUEUES:
-        repo.apply(task.task_id, Event.REQUEUE)   # provider limit OR restart-kill: retry, no penalty
+    """The failure ladder: permanent fail-fast -> transient requeue (BUDGETED) -> PA fast-path
+    -> retry -> escalate. Every rung is bounded by DURABLE counters (BG-3): record_result
+    counted this failure off the event log before we got here, so no budget survives a restart
+    it shouldn't."""
+    cls, why = classify(result.cause or "")
+    if cls is ErrorClass.PERMANENT:
+        repo.record_escalation(task.task_id, cause=result.cause or "",
+                               reason=f"permanent: {why}", project=task.project)
+        repo.apply(task.task_id, Event.FAIL)      # deterministic dead-end — never burn retries
+        return
+    if cls is ErrorClass.TRANSIENT and repo.transient_count(task.task_id) <= MAX_TRANSIENT_REQUEUES:
+        repo.apply(task.task_id, Event.REQUEUE)   # provider limit OR env fault: retry, no penalty
         return
     action = pa_consult(result.cause or "") if pa_consult else None
     total = repo.transient_count(task.task_id) + repo.hard_failure_count(task.task_id)

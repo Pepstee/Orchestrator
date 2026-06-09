@@ -12,6 +12,11 @@ import subprocess
 import uuid
 from dataclasses import dataclass
 
+# Classification is the triage module's job (one taxonomy, L1). Names re-exported here because
+# the dispatcher/repository historically import them from infra.llm.
+from infra.triage import RATE_LIMIT_HINTS as RATE_LIMIT_HINTS
+from infra.triage import is_transient_cause as is_transient_cause
+
 
 @dataclass
 class LLMResult:
@@ -24,18 +29,6 @@ class LLMResult:
 class RateLimited(RuntimeError):
     """Provider usage/rate limit hit — transient (resets, e.g. the Claude Max 5-hour window). The
     caller should back off and retry, NOT treat it as a task failure."""
-
-
-# The SINGLE source of rate/usage-limit hints, matched (case-insensitive) against provider output and
-# failure causes. Covers the real Claude Max wordings — the bare "5-hour limit reached ∙ resets 5am"
-# carries none of the generic phrases, so it MUST be listed explicitly or a limit reads as a hard
-# failure (retried + escalated) instead of self-resolving. Kept specific to avoid false positives.
-RATE_LIMIT_HINTS = (
-    "rate limit", "rate_limit", "ratelimited", "rate_limit_error",
-    "usage limit", "5-hour limit", "5 hour limit", "weekly limit",
-    "try again later", "try again after",
-    "429", "529", "quota", "too many requests", "overloaded", "overloaded_error",
-)
 
 
 def _looks_rate_limited(text: str) -> bool:
@@ -86,22 +79,6 @@ def _fail_provider(provider: str, rc: int, raw: str) -> None:
         f"{provider} exited {rc} with no recognisable error — treating as transient usage limit "
         f"(back off and retry, do not escalate): {raw[-200:]!r}"
     )
-
-
-def is_transient_cause(cause: str) -> bool:
-    """The SINGLE definition of a transient (not-the-task's-fault) failure cause: a provider rate/usage
-    limit, OR the daemon being killed mid-task (KeyboardInterrupt on restart/Ctrl-C). These are the ONLY
-    causes that requeue WITHOUT a retry penalty (unbounded) — because they self-resolve with time.
-
-    A merge conflict is deliberately NOT here: it goes through the BOUNDED retry ladder instead (a fresh
-    re-run off current main clears a stale-branch conflict; a genuine overlapping-diff conflict does NOT
-    self-resolve, so it must be capped and surfaced, never looped — an unbounded conflict requeue burns
-    a full agent run each iteration and will drain the token budget, which is exactly what it once did).
-
-    Used by the dispatcher (requeue, don't fail), the PA (never learn an escalate rule), and the GUI
-    (never show it as 'needs you'). One source so the three can't drift."""
-    low = (cause or "").lower()
-    return "keyboardinterrupt" in low or any(hint in low for hint in RATE_LIMIT_HINTS)
 
 
 def _parse_claude_output(stdout: str) -> LLMResult:
