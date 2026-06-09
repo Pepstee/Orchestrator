@@ -1,0 +1,64 @@
+flowchart TD
+    G([Goal]) --> IF
+
+    subgraph INTAKE["Intake funnel"]
+        IF[Scope-assist + prompt-gen] --> ARCH[Architect proposes\nconfirmable FLOWCHART]
+        ARCH --> UC{You: edit /\nconfirm / decline}
+    end
+
+    UC -- confirm --> GT[GLOBAL TASK]
+    UC -- decline/edit --> ARCH
+    GT --> TM[Task Manager\ndecomposes -> dependency graph]
+    TM --> Q[(Dependency-gated queue\nMLFQ aging)]
+
+    Q --> DIS[Dispatch: pick ready step\n-> estimate DIFFICULTY]
+    DIS --> RT[Route: specialised agent +\ncheapest-sufficient model\ncascade local -> Claude]
+    RT --> AG[Agent executes\npayload in -> AgentResult out]
+
+    AG -->|failure| PA{PA consult\nknown rule?}
+    PA -->|yes| FIX[Deterministic fast-path\nknown fix / requeue] --> Q
+    PA -->|no| RE[Reasoner: depth = difficulty]
+    RE --> LAD{Failure ladder}
+    LAD -->|repair| Q
+    LAD -->|replan| TM
+    LAD -->|escalate| HUMAN[[Escalate to you\n+ notify]]
+
+    AG -->|success| VAL
+
+    subgraph VAL["Validation pipeline (layered, severity-ordered)"]
+        L1[lint] --> L2[type] --> L3[security: bandit/semgrep + taint]
+        L3 --> L4[LLM alert-adjudication] --> L5[tests augmented] --> L6[fragility]
+        L6 --> L7[LLM-JUDGE\n!= builder family, tool-using]
+    end
+
+    VAL -->|automated gates pass| PASS
+
+    subgraph PASS["Progressive-assurance loop (never idle, budget-bounded, non-regressing)"]
+        A1[edge-case tests] --> A2[mutation testing] --> A3[adversarial probing] --> A4[design audit]
+        A4 -->|stricter each cycle| A1
+    end
+
+    PASS --> CC{Completion contract\nALL FOUR}
+    CC --> CW[works = tests]
+    CC --> CI[meets-intent = acceptance]
+    CC --> CQ[correct & quality = judge]
+    CC --> CA[accepted = YOU]
+    CW & CI & CQ & CA --> PROP[Completion-as-proposal\nJudge + Architect emit\none-tap next moves]
+    PROP --> PROM[Curated promotion\nepisode -> procedure -> global memory]
+
+    %% cross-cutting
+    OV[[OVERSEER bounded:\nperiodic global sanity\n+ evolves PA rules]] -.governs.-> PA
+    OV -.watches.-> PASS
+    BUD[[Budget kill-switch +\nCUSUM drift + circuit breakers]] -.bounds.-> PASS
+    BUD -.bounds.-> RT
+    BUS[[Signals & queries bus\nremotable: desktop + mobile]] -.control.-> DIS
+    BUS -.control.-> HUMAN
+    ES[(Event-sourced store +\ntrace-id per goal, replay)] -.records.-> AG
+    ES -.records.-> VAL
+
+    classDef gate fill:#1e293b,stroke:#38bdf8,color:#e2e8f0;
+    classDef human fill:#3b1d52,stroke:#c084fc,color:#f5e9ff;
+    classDef infra fill:#0f2e25,stroke:#34d399,color:#d1fae5;
+    class CC,L7 gate;
+    class UC,HUMAN,CA human;
+    class OV,BUD,BUS,ES infra;
