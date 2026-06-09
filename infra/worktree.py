@@ -64,6 +64,14 @@ def integrate_worktree(project_dir: Path, task_id: str) -> bool:
     return True
 
 
+def head_rev(project_dir: Path) -> str:
+    """The project's current HEAD commit — its base-state for BG-3's input fingerprint.
+    Empty string when the directory is not (yet) a git repo: callers treat that as
+    'determinism unprovable' and fall back to the ordinary bounded ladder."""
+    proc = _git(Path(project_dir), "rev-parse", "HEAD")
+    return proc.stdout.strip() if proc.returncode == 0 else ""
+
+
 def remove_worktree(project_dir: Path, task_id: str) -> None:
     """Tear down the worktree and its branch (best-effort; git owns the deletion, never raw rmtree)."""
     _git(project_dir, "worktree", "remove", "--force", str(_wt_path(project_dir, task_id)))

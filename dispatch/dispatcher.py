@@ -7,6 +7,8 @@ a deterministic stub — no LLM required.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Callable
 
 from core.models import AgentResult, Event, Task, TaskStatus
@@ -15,6 +17,7 @@ from infra.triage import (   # the single failure taxonomy (manifest B1; one sou
     ErrorClass,
     RATE_LIMIT_HINTS,
     classify,
+    is_input_deterministic,
     is_transient_cause,
 )
 
@@ -86,10 +89,24 @@ def run_one(
     return task, result
 
 
-def settle(repo: TaskRepository, task: Task, result: AgentResult, *, pa_consult: PAConsult | None = None) -> None:
+def _input_fingerprint(task: Task, base_state: str) -> str:
+    """Canonical hash of an attempt's inputs (BG-3): the task's stable fields + payload minus
+    volatile keys, bound to the base rev the attempt ran against. One canonicaliser, used by
+    nothing else — the predicate the whole law hangs on, pinned in docs/planning/09 §3."""
+    payload = {k: v for k, v in (task.payload or {}).items() if k != "workdir"}
+    canon = json.dumps(
+        {"type": task.task_type, "title": task.title, "project": task.project,
+         "acceptance": list(task.acceptance_criteria), "payload": payload},
+        sort_keys=True, default=str)
+    return hashlib.sha256(f"{canon}@{base_state}".encode()).hexdigest()
+
+
+def settle(repo: TaskRepository, task: Task, result: AgentResult, *,
+           pa_consult: PAConsult | None = None, base_state: str = "") -> None:
     """Apply an agent's result to its task: on success enqueue any (bounded) spawned tasks and
     COMPLETE; on failure run the failure ladder. Shared by the sequential and concurrent drivers so
-    decomposition + the failure ladder behave identically whichever drives the loop."""
+    decomposition + the failure ladder behave identically whichever drives the loop. `base_state`
+    is the project's HEAD rev at settle time (drivers inject it); empty means 'unknown'."""
     if result.ok:
         for spec in result.spawned_tasks[:MAX_SPAWNED_PER_TASK]:
             try:
@@ -98,7 +115,7 @@ def settle(repo: TaskRepository, task: Task, result: AgentResult, *, pa_consult:
                 pass  # malformed spawn spec — skip, never crash the loop
         repo.apply(task.task_id, Event.COMPLETE)
     else:
-        _handle_failure(repo, task, result, pa_consult)
+        _handle_failure(repo, task, result, pa_consult, base_state)
 
 
 def _handle_failure(
@@ -106,6 +123,7 @@ def _handle_failure(
     task: Task,
     result: AgentResult,
     pa_consult: PAConsult | None,
+    base_state: str = "",
 ) -> None:
     """The failure ladder: permanent fail-fast -> transient requeue (BUDGETED) -> PA fast-path
     -> retry -> escalate. Every rung is bounded by DURABLE counters (BG-3): record_result
@@ -120,6 +138,20 @@ def _handle_failure(
     if cls is ErrorClass.TRANSIENT and repo.transient_count(task.task_id) <= MAX_TRANSIENT_REQUEUES:
         repo.apply(task.task_id, Event.REQUEUE)   # provider limit OR env fault: retry, no penalty
         return
+    cause_text = result.cause or ""
+    if base_state and is_input_deterministic(cause_text):
+        # BG-3 input-hash rule: a deterministic failure (conflict/patch class) may only be
+        # re-attempted if its inputs changed — a rebase/replan moves the base rev, a plain
+        # retry does not. Identical fingerprint => refusing is cheaper than re-failing.
+        fp = _input_fingerprint(task, base_state)
+        if repo.last_attempt_inputs(task.task_id) == fp:
+            repo.record_escalation(
+                task.task_id, cause=cause_text, project=task.project,
+                reason="identical re-attempt refused (BG-3): deterministic failure with "
+                       "unchanged inputs — a replan/rebase must change the base first")
+            repo.apply(task.task_id, Event.FAIL)
+            return
+        repo.record_attempt_inputs(task.task_id, fp)
     action = pa_consult(result.cause or "") if pa_consult else None
     total = repo.transient_count(task.task_id) + repo.hard_failure_count(task.task_id)
     if action == "requeue" and total <= MAX_TRANSIENT_REQUEUES + task.max_retries:

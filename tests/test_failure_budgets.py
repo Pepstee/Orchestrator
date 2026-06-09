@@ -71,6 +71,65 @@ def test_restart_cannot_launder_the_budget(tmp_path):
     )
 
 
+CONFLICT_CAUSE = "merge conflict integrating t1 into alpha (a concurrent task changed the same lines)"
+
+
+def _run_conflict(repo: TaskRepository, task: Task, base_state: str) -> None:
+    repo.apply(task.task_id, Event.CLAIM)
+    repo.record_result(task.task_id, _fail(CONFLICT_CAUSE))
+    settle(repo, task, _fail(CONFLICT_CAUSE), base_state=base_state)
+
+
+def test_identical_deterministic_reattempt_refused(tmp_path):
+    repo = TaskRepository(EventStore(tmp_path / "e.log"))
+    task = repo.create(Task(task_id="t1", title="x", task_type="implement", project="alpha"))
+    _run_conflict(repo, task, base_state="rev-A")
+    assert repo.get("t1").status == TaskStatus.QUEUED, "first conflict: retry permitted"
+    _run_conflict(repo, task, base_state="rev-A")
+    assert repo.get("t1").status == TaskStatus.FAILED, (
+        "same inputs, same base — the re-attempt must be refused, not re-run (BG-3)"
+    )
+
+
+def test_rebase_changes_inputs_and_permits_reattempt(tmp_path):
+    repo = TaskRepository(EventStore(tmp_path / "e.log"))
+    task = repo.create(Task(task_id="t1", title="x", task_type="implement", project="alpha"))
+    _run_conflict(repo, task, base_state="rev-A")
+    _run_conflict(repo, task, base_state="rev-B")   # base moved (rebase/merge happened)
+    assert repo.get("t1").status == TaskStatus.QUEUED, "changed base — retry permitted"
+    _run_conflict(repo, task, base_state="rev-B")
+    assert repo.get("t1").status == TaskStatus.FAILED
+
+
+def test_fingerprint_survives_restart(tmp_path):
+    store_path = tmp_path / "e.log"
+    repo = TaskRepository(EventStore(store_path))
+    task = repo.create(Task(task_id="t1", title="x", task_type="implement", project="alpha"))
+    _run_conflict(repo, task, base_state="rev-A")
+    revived = TaskRepository.replay(EventStore(store_path))
+    t = revived.get("t1")
+    revived.apply("t1", Event.CLAIM)
+    revived.record_result("t1", _fail(CONFLICT_CAUSE))
+    settle(revived, t, _fail(CONFLICT_CAUSE), base_state="rev-A")
+    assert revived.get("t1").status == TaskStatus.FAILED, (
+        "the fingerprint is durable — a restart must not permit the identical re-attempt"
+    )
+
+
+def test_stochastic_failures_keep_the_ordinary_budget(tmp_path):
+    repo = TaskRepository(EventStore(tmp_path / "e.log"))
+    task = repo.create(Task(task_id="t1", title="x", task_type="implement", project="alpha"))
+    rounds = 0
+    while repo.get("t1").status != TaskStatus.FAILED and rounds < 10:
+        repo.apply(task.task_id, Event.CLAIM)
+        repo.record_result(task.task_id, _fail(HARD_CAUSE))
+        settle(repo, task, _fail(HARD_CAUSE), base_state="rev-A")
+        rounds += 1
+    assert rounds == task.max_retries + 1, (
+        "non-deterministic causes must keep their full retry budget despite a fixed base"
+    )
+
+
 def test_revival_respects_the_transient_budget(tmp_path):
     store_path = tmp_path / "e.log"
     repo = TaskRepository(EventStore(store_path))

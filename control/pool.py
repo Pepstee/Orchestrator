@@ -23,7 +23,7 @@ from core.models import AgentResult, Task
 from dispatch.dispatcher import Invoke, PAConsult, is_rate_limited, settle
 from dispatch.repository import TaskRepository
 from infra.workspace import default_projects_root, resolve_project_dir
-from infra.worktree import create_worktree, integrate_worktree, remove_worktree
+from infra.worktree import create_worktree, head_rev, integrate_worktree, remove_worktree
 
 DEFAULT_MAX_WORKERS = 8
 # Task types that edit a project tree -> run in an isolated worktree. Reserved (__) projects (the
@@ -54,7 +54,13 @@ def _settle_one(fut, repo: TaskRepository, task: Task, pa_consult: PAConsult | N
         remove_worktree(proj, task.task_id)
     repo.record_result(task.task_id, result)
     governor.charge(float(result.metadata.get("cost_usd", 0.0)))
-    settle(repo, task, result, pa_consult=pa_consult)
+    base_state = ""
+    if not result.ok and not task.project.startswith("__"):
+        try:
+            base_state = head_rev(resolve_project_dir(root, task.project))   # BG-3 fingerprint base
+        except Exception:
+            base_state = ""
+    settle(repo, task, result, pa_consult=pa_consult, base_state=base_state)
     return result
 
 

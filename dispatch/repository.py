@@ -27,6 +27,7 @@ class TaskRepository:
         self._confirmed: set[str] = set()
         self._hard_failures: Counter = Counter()       # task_id -> non-transient failure count
         self._transient_failures: Counter = Counter()  # task_id -> transient failure count
+        self._attempt_inputs: dict[str, str] = {}      # task_id -> last failed attempt fingerprint
 
     def create(self, task: Task) -> Task:
         self._tasks[task.task_id] = task
@@ -121,6 +122,15 @@ class TaskRepository:
             "escalation",
             {"task_id": task_id, "cause": cause, "reason": reason, "project": project},
         )
+
+    def record_attempt_inputs(self, task_id: str, fingerprint: str) -> None:
+        """Persist the input fingerprint of a failed deterministic attempt (BG-3): the next
+        attempt is only legal if this fingerprint changes (rebase/replan changed the inputs)."""
+        self._attempt_inputs[task_id] = fingerprint
+        self._store.append("attempt_inputs", {"task_id": task_id, "fingerprint": fingerprint})
+
+    def last_attempt_inputs(self, task_id: str) -> str | None:
+        return self._attempt_inputs.get(task_id)
 
     def hard_failure_count(self, task_id: str) -> int:
         """Durable count of non-transient failures (the restart-proof retry budget, BG-3)."""
@@ -239,4 +249,6 @@ class TaskRepository:
                     repo._transient_failures[ev.data["task_id"]] += 1
                 else:
                     repo._hard_failures[ev.data["task_id"]] += 1
+            elif ev.kind == "attempt_inputs":
+                repo._attempt_inputs[ev.data["task_id"]] = ev.data.get("fingerprint", "")
         return repo
