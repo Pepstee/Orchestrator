@@ -18,6 +18,7 @@ class TaskRepository:
     def __init__(self, store: EventStore) -> None:
         self._store = store
         self._tasks: dict[str, Task] = {}
+        self._confirmed: set[str] = set()
 
     def create(self, task: Task) -> Task:
         self._tasks[task.task_id] = task
@@ -79,8 +80,13 @@ class TaskRepository:
         )
 
     def record_confirmation(self, project: str) -> None:
-        """Persist the user's confirmation — the fourth gate, making the project truly DONE."""
+        """Persist the certification that makes the project DONE (self-certified under DG-2)."""
+        self._confirmed.add(project)
         self._store.append("project_confirmed", {"project": project})
+
+    def confirmed_projects(self) -> frozenset[str]:
+        """Projects with a recorded certification (BG-2 reads this to lift the breadth cap)."""
+        return frozenset(self._confirmed)
 
     def record_assurance(self, project: str, *, fully_hardened: bool, reason: str) -> None:
         """Persist the progressive-assurance outcome for a project (surfaced in the tray)."""
@@ -147,7 +153,8 @@ class TaskRepository:
                 count += 1
         return count
 
-    def claim_next(self, *, per_project_cap: int = 1) -> Task | None:
+    def claim_next(self, *, per_project_cap: int = 1,
+                   allowed_projects: "set[str] | None" = None) -> Task | None:
         """Pick the next ready, non-`control` task, mark it IN_PROGRESS, and return it (or None).
         Ready = QUEUED with every prerequisite DONE.
 
@@ -168,6 +175,9 @@ class TaskRepository:
         for task in self._tasks.values():
             if task.status != TaskStatus.QUEUED or task.task_type == "control":
                 continue
+            if (allowed_projects is not None and not task.project.startswith("__")
+                    and task.project not in allowed_projects):
+                continue   # BG-2: depth before breadth — project not in the current allowance
             if per_project_cap and running.get(task.project, 0) >= per_project_cap:
                 continue
             if all(self._tasks.get(d) is not None and self._tasks[d].status == TaskStatus.DONE
@@ -198,4 +208,6 @@ class TaskRepository:
                 t = repo._tasks.get(ev.data["task_id"])
                 if t is not None:
                     t.priority = int(ev.data.get("priority", 0))
+            elif ev.kind == "project_confirmed":
+                repo._confirmed.add(ev.data.get("project", ""))
         return repo

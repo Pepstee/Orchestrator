@@ -73,6 +73,7 @@ def run_concurrent(
     project_cap: int = 1,
     maintenance: Callable[[], None] | None = None,
     maintenance_interval: float = 10.0,
+    allowed_projects: "Callable[[], set[str] | None] | None" = None,
 ) -> int:
     """Drive ready tasks across up to `max_workers` concurrent agents until none are ready, max_steps
     completions, the budget/kill-switch, or should_stop. With `isolate`, each file-editing task runs in
@@ -100,8 +101,9 @@ def run_concurrent(
             if maintenance is not None and time.monotonic() - last_maint >= maintenance_interval:
                 maintenance()                            # runs DURING the batch, on a time cadence
                 last_maint = time.monotonic()
+            allowed = allowed_projects() if allowed_projects is not None else None   # BG-2
             while len(inflight) < max_workers:           # fill idle slots with newly-claimed work
-                task = repo.claim_next(per_project_cap=project_cap)
+                task = repo.claim_next(per_project_cap=project_cap, allowed_projects=allowed)
                 if task is None:
                     break
                 if isolate and _needs_worktree(task):

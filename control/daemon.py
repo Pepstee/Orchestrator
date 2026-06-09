@@ -20,6 +20,7 @@ import uuid
 from pathlib import Path
 from typing import Callable
 
+from control.breadth import breadth_allowance, read_flagship
 from control.budget import BudgetGovernor
 from control.confirm import ingest_confirmations
 from control.inbox import ingest
@@ -330,6 +331,7 @@ def serve(
     inbox: str | None = None,
     on_cycle: Callable[[], None] | None = None,
     pa_consult: PAConsult | None = None,
+    allowed_projects: "Callable[[], set[str] | None] | None" = None,
 ) -> int:
     """Run ready tasks CONCURRENTLY (up to max_workers agents at once) until should_stop(), ingesting
     newly-enqueued work each cycle and running an optional per-cycle hook (project monitoring). Sleeps
@@ -349,7 +351,8 @@ def serve(
         _maintain()
         processed = run_concurrent(repo, invoke, governor, max_workers=max_workers,
                                    project_cap=project_cap, max_steps=batch, pa_consult=pa_consult,
-                                   should_stop=should_stop, maintenance=_maintain)
+                                   should_stop=should_stop, maintenance=_maintain,
+                                   allowed_projects=allowed_projects)
         total += processed
         if processed == 0:
             time.sleep(poll_interval)
@@ -416,9 +419,14 @@ def main() -> None:
 
     max_workers = max(1, int(os.environ.get("AGENTIC_MAX_WORKERS", str(DEFAULT_MAX_WORKERS))))
     project_cap = max(0, int(os.environ.get("AGENTIC_PROJECT_CONCURRENCY", "1")))
+    flagship = read_flagship(state)   # BG-2: human-only configuration (state/flagship)
+    if not repo.confirmed_projects() and flagship is None:
+        notify("Orchestrator",
+               "BG-2: no certification yet and state/flagship is unset — only the overseer dispatches")
     try:
         serve(repo, governor, make_subprocess_invoke(), should_stop=should_stop,
-              max_workers=max_workers, project_cap=project_cap, on_cycle=on_cycle, pa_consult=pa_consult)
+              max_workers=max_workers, project_cap=project_cap, on_cycle=on_cycle, pa_consult=pa_consult,
+              allowed_projects=lambda: breadth_allowance(repo, flagship))
     finally:
         pidlock.release(lock)
 

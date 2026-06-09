@@ -36,6 +36,9 @@ LAWS: list[Law] = [
         "tests/architecture/test_every_law_has_a_check.py"),
     Law("BG1", "Boot self-test gates dispatch (enforcement before features; no bypass)", "active",
         "tests/architecture/test_boot_self_test.py"),
+    Law("BG2", "Depth before breadth (flagship-only dispatch until a first certification; "
+        "flagship is human-set)", "active",
+        "tests/architecture/test_breadth_cap.py"),
 
     # Deferred — subsystem not built yet; check planned (gap kept explicit and traceable).
     Law("L4", "Deliverable purity (project tree isolated; no orchestrator scratch)", "active",
