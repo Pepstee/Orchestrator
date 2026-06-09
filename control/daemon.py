@@ -25,6 +25,7 @@ from control.confirm import ingest_confirmations
 from control.inbox import ingest
 from control.pool import DEFAULT_MAX_WORKERS, run_concurrent
 from control.project import DEFAULT_TEST_COMMAND, ProjectOutcome, evaluate_project
+from control.self_test import run_boot_self_test
 from core.models import Event, Task, TaskStatus
 from dispatch.dispatcher import Invoke, PAConsult, propagate_prerequisite_failures
 from dispatch.repository import TaskRepository
@@ -361,6 +362,14 @@ def main() -> None:
     state.mkdir(exist_ok=True)
     lock = state / "daemon.pid"
     pidlock.acquire(lock)
+
+    # BG-1 — enforcement before features: refuse to dispatch unless every law-linked check is
+    # present, collected, and passing. Deliberately unbypassable (no flag, no env switch).
+    ok, detail = run_boot_self_test(root)
+    if not ok:
+        pidlock.release(lock)
+        notify("Orchestrator", f"BOOT SELF-TEST FAILED — refusing to dispatch: {detail[:160]}")
+        raise SystemExit(3)
 
     stopped = {"flag": False}
 

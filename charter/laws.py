@@ -34,6 +34,8 @@ LAWS: list[Law] = [
         "tests/architecture/test_state_machine_total.py"),
     Law("PRIME", "Every active law has a machine-check", "active",
         "tests/architecture/test_every_law_has_a_check.py"),
+    Law("BG1", "Boot self-test gates dispatch (enforcement before features; no bypass)", "active",
+        "tests/architecture/test_boot_self_test.py"),
 
     # Deferred — subsystem not built yet; check planned (gap kept explicit and traceable).
     Law("L4", "Deliverable purity (project tree isolated; no orchestrator scratch)", "active",
