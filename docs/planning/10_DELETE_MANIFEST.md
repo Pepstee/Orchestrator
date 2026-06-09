@@ -42,7 +42,7 @@ arrive via the port ledger's per-module tests.
 
 | Row | Target | Reason-class | Replacement / gate | Status |
 |-----|--------|--------------|--------------------|--------|
-| B1 | String-matched failure classifier | legacy logic, re-broke solved problem | ported `error_triage` (rework), Phase C cutover | ⛔M |
+| B1 | String-matched failure classifier | legacy logic, re-broke solved problem | **DONE 9 Jun:** `infra/triage.py` (reworked v1 organ) is the single taxonomy; `infra/llm.py` re-exports for compatibility; PERMANENT class fails fast. AIMD half: **waived** (see port ledger) | ☑ 9 Jun |
 | B2 | Toothless gate-proxy bodies in `validation/gates.py` | working incorrectly | Phase D gates with teeth (tuple itself stays — ratified DG-2) | ⛔M |
 | B3 | Overseer chat-resume **dependency** (resume-or-die path) | working incorrectly | BG-6 stateless pulse; resume demoted to optimisation | ⛔M |
 | B4 | STOP-sentinel control path | legacy | deleted only when the signals surface (Phase G) is live — L8 | ⛔M |

@@ -7,8 +7,8 @@ honour L1: one canonical implementation in v2 — reconcile, never duplicate.*
 
 | Module | What it is (proven in v1) | Disposition | Lands in | Closes |
 |--------|---------------------------|-------------|----------|--------|
-| `error_triage.py` | 3-class failure taxonomy (TRANSIENT / RECOVERABLE / PERMANENT), `MAX_TRANSIENT_REQUEUES=5`, rate-limit-as-transient, repair-spawn on last retry | **Rework-port** — replaces v2's string-matched classifier (B1) | Phase C | F9, I16 |
-| `admission_control.py` | AIMD concurrency control against rate-limit cascades | **Port as-is** | Phase C | R6 mitigation |
+| `error_triage.py` | 3-class failure taxonomy (TRANSIENT / RECOVERABLE / PERMANENT), `MAX_TRANSIENT_REQUEUES=5`, rate-limit-as-transient, repair-spawn on last retry | **☑ PORTED 9 Jun** → `infra/triage.py` (+ `is_input_deterministic` for BG-3); cap lives in `dispatch/repository.py`; tests `tests/test_triage.py` | done | F9, I16 |
+| `admission_control.py` | AIMD concurrency control against rate-limit cascades | **WAIVED 9 Jun** (BG-7 waiver — owner: Artiom; expiry: first 7-day soak). Reason: the failure mode is already covered by rate-limit batch backoff + the durable transient budget + the burn breaker; AIMD is a throughput optimisation. Lands during Phase F if the soak shows throughput loss around usage windows | waived | R6 mitigation |
 | `io_utils.py` | Atomic write ladder (mkstemp+fsync+replace) + tombstones | **Reference** — v2 likely has an equivalent; reconcile to ONE (L1/L7) | Phase B | L7 |
 | `task_checkpoint.py` | Mid-run crash-recovery snapshots, injected on retry | **Port** — the timeout-resume mechanism | Phase C | I2 |
 | `session_checkpoint.py` | 30-min warm-start summaries of queue state | **Reference** — fold into journal/digest design | Phase B | — |
