@@ -39,6 +39,9 @@ LAWS: list[Law] = [
     Law("BG2", "Depth before breadth (flagship-only dispatch until a first certification; "
         "flagship is human-set)", "active",
         "tests/architecture/test_breadth_cap.py"),
+    Law("BG3", "Failure budgets are durable and every requeue path is finite "
+        "(counters derive from the event log; restarts cannot launder a budget)", "active",
+        "tests/test_failure_budgets.py"),
 
     # Deferred — subsystem not built yet; check planned (gap kept explicit and traceable).
     Law("L4", "Deliverable purity (project tree isolated; no orchestrator scratch)", "active",

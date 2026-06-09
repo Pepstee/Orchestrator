@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Callable
 
 from core.models import AgentResult, Event, Task, TaskStatus
-from dispatch.repository import TaskRepository
+from dispatch.repository import MAX_TRANSIENT_REQUEUES, TaskRepository
 from infra.llm import RATE_LIMIT_HINTS, is_transient_cause   # single source of limit/transient classification
 
 # An invoke takes a task and returns its AgentResult (subprocess agent, or a test stub).
@@ -102,22 +102,26 @@ def _handle_failure(
     result: AgentResult,
     pa_consult: PAConsult | None,
 ) -> None:
-    """The failure ladder: transient requeue -> PA fast-path -> retry -> escalate."""
-    if is_transient(result):
-        repo.apply(task.task_id, Event.REQUEUE)   # provider limit OR restart-kill: retry, no penalty, no escalation
+    """The failure ladder: transient requeue (BUDGETED) -> PA fast-path -> retry -> escalate.
+    Every rung is bounded by DURABLE counters (BG-3): record_result counted this failure off the
+    event log before we got here, so no budget can be laundered by a restart."""
+    if is_transient(result) and repo.transient_count(task.task_id) <= MAX_TRANSIENT_REQUEUES:
+        repo.apply(task.task_id, Event.REQUEUE)   # provider limit OR restart-kill: retry, no penalty
         return
     action = pa_consult(result.cause or "") if pa_consult else None
-    if action == "requeue":                          # PA: transient — retry without penalty
-        task.retries += 1
+    total = repo.transient_count(task.task_id) + repo.hard_failure_count(task.task_id)
+    if action == "requeue" and total <= MAX_TRANSIENT_REQUEUES + task.max_retries:
+        task.retries += 1                            # PA requeue — finite combined budget (BG-3)
         repo.apply(task.task_id, Event.REQUEUE)
-    elif action == "escalate":                       # PA: known dead-end — straight to the user
+    elif action == "escalate":                       # PA: known dead-end — terminal
         repo.record_escalation(task.task_id, cause=result.cause or "", reason="pa:escalate",
                                project=task.project)
         repo.apply(task.task_id, Event.FAIL)
-    elif task.retries < task.max_retries:            # no decisive PA verdict — ordinary retry
+    elif (task.retries < task.max_retries
+          and repo.hard_failure_count(task.task_id) <= task.max_retries):   # ordinary retry, durable budget
         task.retries += 1
         repo.apply(task.task_id, Event.REQUEUE)
-    else:                                            # retries exhausted — escalate
+    else:                                            # budgets exhausted — terminal, recorded
         repo.record_escalation(task.task_id, cause=result.cause or "", reason="retries exhausted",
                                project=task.project)
         repo.apply(task.task_id, Event.FAIL)

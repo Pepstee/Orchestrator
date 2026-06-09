@@ -14,11 +14,19 @@ from infra.event_store import EventStore
 from infra.llm import is_transient_cause
 
 
+# Ported from v1 (port/v1/error_triage.py): even "self-resolving" transient causes get a finite
+# requeue budget per task. Misclassification is inevitable (a task's own output may contain a
+# rate-limit phrase); after this many transient requeues the task falls to the BOUNDED ladder.
+MAX_TRANSIENT_REQUEUES = 5
+
+
 class TaskRepository:
     def __init__(self, store: EventStore) -> None:
         self._store = store
         self._tasks: dict[str, Task] = {}
         self._confirmed: set[str] = set()
+        self._hard_failures: Counter = Counter()       # task_id -> non-transient failure count
+        self._transient_failures: Counter = Counter()  # task_id -> transient failure count
 
     def create(self, task: Task) -> Task:
         self._tasks[task.task_id] = task
@@ -60,7 +68,14 @@ class TaskRepository:
         self._store.append("task_reprioritised", {"task_id": task_id, "priority": int(priority)})
 
     def record_result(self, task_id: str, result: AgentResult) -> None:
-        """Persist an agent's result to the durable log (audit; a failure carries its cause)."""
+        """Persist an agent's result to the durable log (audit; a failure carries its cause).
+        Failure budgets are counted HERE, off the durable record, so they survive restart —
+        a replay reconstructs the same counts and a restart can never launder a retry budget."""
+        if not result.ok:
+            if is_transient_cause(result.cause or ""):
+                self._transient_failures[task_id] += 1
+            else:
+                self._hard_failures[task_id] += 1
         self._store.append(
             "task_result",
             {
@@ -107,6 +122,14 @@ class TaskRepository:
             {"task_id": task_id, "cause": cause, "reason": reason, "project": project},
         )
 
+    def hard_failure_count(self, task_id: str) -> int:
+        """Durable count of non-transient failures (the restart-proof retry budget, BG-3)."""
+        return self._hard_failures[task_id]
+
+    def transient_count(self, task_id: str) -> int:
+        """Durable count of transient failures (caps the 'no-penalty' requeue path, BG-3)."""
+        return self._transient_failures[task_id]
+
     def last_results(self) -> dict[str, dict]:
         """task_id -> the latest {ok, cause, summary} (the planner reads failure causes to replan)."""
         out: dict[str, dict] = {}
@@ -148,8 +171,9 @@ class TaskRepository:
             if task.status != TaskStatus.FAILED:
                 continue
             res = causes.get(task.task_id)
-            if res and not res.get("ok") and is_transient_cause(res.get("cause") or ""):
-                self.apply(task.task_id, Event.REQUEUE)
+            if (res and not res.get("ok") and is_transient_cause(res.get("cause") or "")
+                    and self._transient_failures[task.task_id] <= MAX_TRANSIENT_REQUEUES):
+                self.apply(task.task_id, Event.REQUEUE)   # under budget — infra fault, retry
                 count += 1
         return count
 
@@ -210,4 +234,9 @@ class TaskRepository:
                     t.priority = int(ev.data.get("priority", 0))
             elif ev.kind == "project_confirmed":
                 repo._confirmed.add(ev.data.get("project", ""))
+            elif ev.kind == "task_result" and not ev.data.get("ok"):
+                if is_transient_cause(ev.data.get("cause") or ""):
+                    repo._transient_failures[ev.data["task_id"]] += 1
+                else:
+                    repo._hard_failures[ev.data["task_id"]] += 1
         return repo
