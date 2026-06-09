@@ -396,6 +396,7 @@ def main() -> None:
         return stopped["flag"] or stop_sentinel.exists() or governor.should_stop()[0]
 
     evaluated: dict[str, frozenset] = {}
+    burn_flag = {"notified": False}
     pa_path = state / "pa_rules.json"
     session_path = state / "overseer_session.json"
     handoff_path = state / "handoff_latest.md"
@@ -403,6 +404,12 @@ def main() -> None:
     overseer_meta: dict = {}
 
     def on_cycle() -> None:
+        if governor.burn_paused() and not burn_flag["notified"]:
+            notify("Orchestrator", "burn-rate breaker tripped — success ratio collapsed; "
+                                   "paid project work paused, overseer continues")
+            burn_flag["notified"] = True
+        elif not governor.burn_paused():
+            burn_flag["notified"] = False
         ingest_confirmations(repo)   # apply any user confirmations (the fourth gate)
         monitor_projects(repo, evaluated, governor=governor, should_stop=should_stop)
         tick_overseer_session(repo, session_path, handoff_path, overseer_meta)  # the meta-agent's heartbeat
@@ -426,7 +433,8 @@ def main() -> None:
     try:
         serve(repo, governor, make_subprocess_invoke(), should_stop=should_stop,
               max_workers=max_workers, project_cap=project_cap, on_cycle=on_cycle, pa_consult=pa_consult,
-              allowed_projects=lambda: breadth_allowance(repo, flagship))
+              allowed_projects=lambda: (set() if governor.burn_paused()       # breaker parks paid work
+                                        else breadth_allowance(repo, flagship)))
     finally:
         pidlock.release(lock)
 

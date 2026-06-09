@@ -54,6 +54,7 @@ def _settle_one(fut, repo: TaskRepository, task: Task, pa_consult: PAConsult | N
         remove_worktree(proj, task.task_id)
     repo.record_result(task.task_id, result)
     governor.charge(float(result.metadata.get("cost_usd", 0.0)))
+    governor.record_outcome(result.ok)   # burn-rate breaker input (one signal per settled run)
     base_state = ""
     if not result.ok and not task.project.startswith("__"):
         try:
