@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 
 from infra.atomic_io import remove, write_json_atomic
@@ -20,6 +21,22 @@ class AlreadyRunning(RuntimeError):
 def _alive(pid: int) -> bool:
     if pid <= 0:
         return False
+    if sys.platform == "win32":
+        # On Windows os.kill TerminateProcess-es the target for any non-CTRL signal (it is NOT a
+        # liveness probe), so query the process state via the Win32 API instead.
+        import ctypes
+
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        STILL_ACTIVE = 259
+        handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            return False
+        try:
+            code = ctypes.c_ulong()
+            ok = ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
+            return bool(ok) and code.value == STILL_ACTIVE
+        finally:
+            ctypes.windll.kernel32.CloseHandle(handle)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:

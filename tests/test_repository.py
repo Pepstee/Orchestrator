@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from core.models import Event, Task, TaskStatus
+from core.models import AgentResult, Event, Task, TaskStatus
 from dispatch.repository import TaskRepository
 from infra.event_store import EventStore
 
@@ -43,3 +43,53 @@ def test_queued_can_be_blocked(tmp_path: Path):
     repo.create(_task())
     repo.apply("t1", Event.BLOCK)  # the v1 bug, now legal
     assert repo.get("t1").status == TaskStatus.BLOCKED
+
+
+def test_claim_next_caps_concurrency_per_project(tmp_path: Path):
+    """With per_project_cap=1, a project that already has a task IN_PROGRESS yields no further claims,
+    so two agents never edit one project tree at once (the merge-conflict thrash is structurally
+    impossible). A different project is still claimable on the same cycle."""
+    repo = TaskRepository(EventStore(tmp_path / "e.log"))
+    repo.create(Task(task_id="a1", title="x", task_type="implement", project="alpha"))
+    repo.create(Task(task_id="a2", title="x", task_type="implement", project="alpha"))
+    repo.create(Task(task_id="b1", title="x", task_type="implement", project="beta"))
+
+    first = repo.claim_next(per_project_cap=1)
+    assert first is not None and first.project == "alpha"
+    # alpha is now busy: the cap skips a2 and hands out beta instead.
+    second = repo.claim_next(per_project_cap=1)
+    assert second is not None and second.task_id == "b1"
+    # both projects busy -> nothing left to claim under the cap.
+    assert repo.claim_next(per_project_cap=1) is None
+    # free alpha; a2 becomes claimable again.
+    repo.apply("a1", Event.COMPLETE)
+    third = repo.claim_next(per_project_cap=1)
+    assert third is not None and third.task_id == "a2"
+
+
+def test_revive_transient_failures_requeues_only_transient(tmp_path: Path):
+    """Boot revival returns a task FAILED for a TRANSIENT cause (provider limit / restart-kill) to
+    QUEUED. A merge conflict is NOT transient — it must stay FAILED, never be revived into an unbounded
+    loop (a conflict re-run burns a full agent each time and drained the budget once)."""
+    repo = TaskRepository(EventStore(tmp_path / "e.log"))
+    repo.create(Task(task_id="limited", title="x", task_type="implement", project="P"))
+    repo.create(Task(task_id="conflict", title="y", task_type="implement", project="Q"))
+    for tid, cause in [("limited", "claude usage limit: 5-hour limit reached"),
+                       ("conflict", "merge conflict integrating conflict into Q")]:
+        repo.apply(tid, Event.CLAIM)
+        repo.record_result(tid, AgentResult(ok=False, summary="fail", cause=cause))
+        repo.apply(tid, Event.FAIL)
+    n = repo.revive_transient_failures()
+    assert n == 1
+    assert repo.get("limited").status == TaskStatus.QUEUED    # transient -> revived
+    assert repo.get("conflict").status == TaskStatus.FAILED   # conflict -> stays terminal (no loop)
+
+
+def test_claim_next_unbounded_cap_allows_many_per_project(tmp_path: Path):
+    """per_project_cap=0 disables the cap: concurrent same-project claims are permitted (worktree
+    isolation makes this safe), for operators who want intra-project parallelism."""
+    repo = TaskRepository(EventStore(tmp_path / "e.log"))
+    repo.create(Task(task_id="a1", title="x", task_type="implement", project="alpha"))
+    repo.create(Task(task_id="a2", title="x", task_type="implement", project="alpha"))
+    assert repo.claim_next(per_project_cap=0) is not None
+    assert repo.claim_next(per_project_cap=0) is not None  # same project, still claimable

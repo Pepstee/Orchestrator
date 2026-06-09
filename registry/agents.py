@@ -19,20 +19,18 @@ _PY = sys.executable or "python3"
 # task_type -> agent name. (One responsibility, one canonical mapping.)
 TASK_TYPE_TO_AGENT: dict[str, str] = {
     "plan": "task_manager",
-    "architect": "architect",
     "implement": "builder",
+    "test": "tester",        # the INDEPENDENT test-author (separate from the builder — anti-collusion)
     "validate": "judge",
-    "test": "tester",
     "oversee": "overseer",
 }
 
 # agent -> launch command (the subprocess contract).
 AGENT_COMMANDS: dict[str, list[str]] = {
     "task_manager": [_PY, "-m", "agents.task_manager"],
-    "architect":    [_PY, "-m", "agents.architect"],
     "builder":      [_PY, "-m", "agents.builder"],
-    "judge":        [_PY, "-m", "agents.judge"],
     "tester":       [_PY, "-m", "agents.tester"],
+    "judge":        [_PY, "-m", "agents.judge"],
     "overseer":     [_PY, "-m", "agents.overseer"],
 }
 
@@ -42,10 +40,9 @@ AGENT_COMMANDS: dict[str, list[str]] = {
 AGENT_MODELS: dict[str, dict[str, str]] = {
     # role          provider    model tier        notes
     "task_manager": {"provider": "claude", "model": "sonnet"},   # ->opus for complex goals
-    "architect":    {"provider": "claude", "model": "opus"},     # highest-stakes design
     "builder":      {"provider": "claude", "model": "sonnet"},   # cascades local->sonnet->opus by difficulty
+    "tester":       {"provider": "claude", "model": "sonnet"},   # independent test-author (mutation gate backs it)
     "judge":        {"provider": "openai", "model": "codex"},    # cross-provider independence (F5)
-    "tester":       {"provider": "claude", "model": "haiku"},    # mechanical, high-volume
     "overseer":     {"provider": "claude", "model": "opus"},     # high-stakes judgment (bounded)
 }
 

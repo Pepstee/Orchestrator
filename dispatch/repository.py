@@ -6,9 +6,12 @@ Illegal transitions are no-ops, never crashes — the structural fix for v1's tr
 """
 from __future__ import annotations
 
+from collections import Counter
+
 from core.models import AgentResult, Event, Task, TaskStatus
 from core.state_machine import transition
 from infra.event_store import EventStore
+from infra.llm import is_transient_cause
 
 
 class TaskRepository:
@@ -33,6 +36,27 @@ class TaskRepository:
             {"task_id": task_id, "event": event.value, "from": old.value, "to": new_status.value},
         )
         return task
+
+    def cancel_task(self, task_id: str, *, cause: str = "") -> None:
+        """Terminally cancel a non-terminal task (the overseer abandoning a doomed project). QUEUED has
+        no direct ->FAIL in the state machine, so it passes through BLOCKED first. No-op on a task that
+        is already terminal or absent. Reversible: the work can be re-enqueued; this only stops it."""
+        task = self._tasks.get(task_id)
+        if task is None or task.status in (TaskStatus.DONE, TaskStatus.FAILED):
+            return
+        if task.status == TaskStatus.QUEUED:
+            self.apply(task_id, Event.BLOCK)     # QUEUED -> BLOCKED (legal), so we can then FAIL
+        self.apply(task_id, Event.FAIL)          # IN_PROGRESS / BLOCKED -> FAILED
+        self._store.append("task_cancelled", {"task_id": task_id, "cause": cause})
+
+    def set_priority(self, task_id: str, priority: int) -> None:
+        """Set a task's scheduling priority (the overseer reprioritising work). Persisted as its own
+        event so it survives replay; select_next_task runs higher-priority ready tasks first."""
+        task = self._tasks.get(task_id)
+        if task is None:
+            return
+        task.priority = int(priority)
+        self._store.append("task_reprioritised", {"task_id": task_id, "priority": int(priority)})
 
     def record_result(self, task_id: str, result: AgentResult) -> None:
         """Persist an agent's result to the durable log (audit; a failure carries its cause)."""
@@ -64,6 +88,11 @@ class TaskRepository:
             "assurance_result",
             {"project": project, "fully_hardened": fully_hardened, "reason": reason},
         )
+
+    def record_abandoned(self, project: str, *, reason: str) -> None:
+        """The orchestrator gave up on a project it couldn't complete autonomously (planner + overseer
+        exhausted). Logged for the record; nothing waits on the operator. Re-enqueueable later."""
+        self._store.append("project_abandoned", {"project": project, "reason": reason})
 
     def record_escalation(self, task_id: str, *, cause: str, reason: str, project: str = "") -> None:
         """Persist that a failure was escalated to the user (PA fast-path or retries exhausted)."""
@@ -100,6 +129,53 @@ class TaskRepository:
                 count += 1
         return count
 
+    def revive_transient_failures(self) -> int:
+        """Re-queue tasks that FAILED for a TRANSIENT cause — a provider limit, a restart-kill, or a git
+        merge conflict. Such a failure is infra, not the task's fault, so it must never be terminal: on
+        restart, retry it. Under the per-project cap (one agent per tree) a revived conflict re-runs
+        alone and merges cleanly. This also clears stale 'needs you' escalations recorded before the cap
+        was in force (their cause is now classified transient, so the GUI filters them too). Run once on
+        startup, right after reclaim_orphans."""
+        causes = self.last_results()
+        count = 0
+        for task in list(self._tasks.values()):
+            if task.status != TaskStatus.FAILED:
+                continue
+            res = causes.get(task.task_id)
+            if res and not res.get("ok") and is_transient_cause(res.get("cause") or ""):
+                self.apply(task.task_id, Event.REQUEUE)
+                count += 1
+        return count
+
+    def claim_next(self, *, per_project_cap: int = 1) -> Task | None:
+        """Pick the next ready, non-`control` task, mark it IN_PROGRESS, and return it (or None).
+        Ready = QUEUED with every prerequisite DONE.
+
+        `per_project_cap` bounds how many tasks of ONE project may run concurrently (0 = unbounded).
+        At the default of 1 a project is effectively serialised: two agents never edit the same
+        project tree at once, so the intra-project merge-conflict thrash (concurrent agents touching
+        the same lines → worktree conflict → retry → wasted tokens) cannot occur. Cross-project
+        concurrency is untouched — all active projects still advance in parallel, so throughput tracks
+        the number of live projects. Raise the cap (env `AGENTIC_PROJECT_CONCURRENCY`) to trade some
+        conflict risk for intra-project parallelism; the worktree isolation (infra.worktree) stays in
+        place either way and makes >1 safe.
+
+        Claim-on-select means the next claim can't hand out the same task. Called only from the
+        dispatcher's main thread, so the IN_PROGRESS tally below is race-free."""
+        running = Counter(
+            t.project for t in self._tasks.values() if t.status == TaskStatus.IN_PROGRESS
+        )
+        for task in self._tasks.values():
+            if task.status != TaskStatus.QUEUED or task.task_type == "control":
+                continue
+            if per_project_cap and running.get(task.project, 0) >= per_project_cap:
+                continue
+            if all(self._tasks.get(d) is not None and self._tasks[d].status == TaskStatus.DONE
+                   for d in task.depends_on):
+                self.apply(task.task_id, Event.CLAIM)
+                return task
+        return None
+
     def get(self, task_id: str) -> Task | None:
         return self._tasks.get(task_id)
 
@@ -118,4 +194,8 @@ class TaskRepository:
                 t = repo._tasks.get(ev.data["task_id"])
                 if t is not None:
                     t.status = TaskStatus(ev.data["to"])
+            elif ev.kind == "task_reprioritised":
+                t = repo._tasks.get(ev.data["task_id"])
+                if t is not None:
+                    t.priority = int(ev.data.get("priority", 0))
         return repo

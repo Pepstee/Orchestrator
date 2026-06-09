@@ -19,10 +19,14 @@ from infra.workspace import default_projects_root, resolve_project_dir
 from registry.agents import model_for
 
 SYSTEM_PROMPT = (
-    "You are the validator/judge in an autonomous orchestrator, running on a different model "
-    "provider than the builder for independence. Judge whether the implementation truly meets the "
-    "task and its acceptance criteria. Reward correctness and safety, not plausibility — a passing "
-    "test suite is not proof. Output a single JSON verdict line and nothing else."
+    "You are the validator/judge in an autonomous orchestrator, on a different model provider than "
+    "the builder for independence. You are the FINAL arbiter of 'done' — there is NO human reviewer "
+    "after you, so be thorough and uncompromising. Judge whether the implementation is genuinely "
+    "complete, correct, and of a professional, industry-standard quality — actually working software, "
+    "not a stub or an imitation that only looks finished. Reward correctness and real functionality, "
+    "never plausibility; a passing test suite is NOT proof. You MAY use web search to check current "
+    "best practices, library usage, and the quality bar real products in this category meet. Pass "
+    "only what you would be proud to ship. Output a single JSON verdict line and nothing else."
 )
 
 LLMCall = Callable[..., LLMResult]
@@ -34,8 +38,11 @@ def build_prompt(task: Task) -> str:
         f"Task that was implemented: {task.title}\n\n"
         f"Acceptance criteria:\n{crit}\n\n"
         "Independently review the implementation in the current working directory against the task "
-        "and its acceptance criteria. Be strict and skeptical about correctness and safety — a "
-        "passing test suite is not proof.\n"
+        "and its acceptance criteria, AND against the standard a real, shippable product in this "
+        "category would meet (use web search if it helps you judge that bar). Be strict and skeptical "
+        "about correctness, completeness and safety — a passing test suite is not proof. FAIL anything "
+        "that is a stub, placeholder, or imitation of working software, or that is merely 'okay' "
+        "rather than genuinely finished and impressive. You are the last gate; nothing human follows.\n"
         "If you choose to run the tests yourself, run `pytest -q` from the current directory (it "
         "discovers tests anywhere; do NOT assume a tests/ subdirectory). Base your verdict on whether "
         "the implementation is actually correct and meets the criteria — do NOT fail solely because a "

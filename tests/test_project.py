@@ -27,12 +27,12 @@ def _ok(_task: Task) -> AgentResult:
     return AgentResult(ok=True, summary="ok")
 
 
-def test_pending_user_when_automated_gates_pass(tmp_path: Path):
+def test_self_certifies_when_automated_gates_pass(tmp_path: Path):
     repo, gov = _setup(tmp_path)
     out = run_project(repo, gov, project="demo", invoke=_ok,
                       projects_root=str(tmp_path), test_command=PASS)
-    assert out.gates == {"tests": True, "acceptance": True, "judge": True, "user": False}
-    assert not out.completion.done and out.pending_user      # finished, awaiting your confirm
+    assert out.gates == {"tests": True, "acceptance": True, "judge": True, "authenticity": True}
+    assert out.completion.done and out.complete      # no human gate — automated gates alone = done
     assert out.tasks_done == 2
 
 
@@ -46,7 +46,7 @@ def test_failed_build_blocks_and_judge_never_runs(tmp_path: Path):
                       projects_root=str(tmp_path), test_command=PASS)
     assert not out.gates["acceptance"]      # the build task did not reach DONE
     assert not out.gates["judge"]           # validate stayed gated on the failed prerequisite
-    assert not out.pending_user
+    assert not out.complete
 
 
 def test_judge_rejection_blocks(tmp_path: Path):

@@ -23,6 +23,19 @@ def test_evolve_mines_recurring_cause_into_candidate():
     assert rules[0].pattern == "boom" and rules[0].status == "candidate" and rules[0].action == "escalate"
 
 
+def test_evolve_ignores_transient_causes():
+    """Transient infra (restart-kills, rate limits) must NEVER become escalate rules — that mis-learning
+    is what flooded the tray with phantom KeyboardInterrupt escalations."""
+    causes = (["Traceback ... KeyboardInterrupt"] * 8
+              + ["claude: 5-hour limit reached ∙ resets 5am"] * 8
+              + ["real defect: missing module foo"] * 8)
+    rules = evolve([], causes, min_occurrences=3, evidence_threshold=5)
+    patterns = [r.pattern.lower() for r in rules]
+    assert any("real defect" in p for p in patterns)                 # genuine recurring defect still mined
+    assert not any("keyboardinterrupt" in p for p in patterns)       # transient excluded
+    assert not any("5-hour limit" in p for p in patterns)
+
+
 def test_evolve_ignores_one_offs():
     rules = evolve([], ["a", "b", "c"], min_occurrences=3)
     assert rules == []

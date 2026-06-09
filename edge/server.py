@@ -16,6 +16,8 @@ import os
 import secrets
 import socket
 import subprocess
+import time
+from collections import Counter
 from http import cookies as http_cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -33,6 +35,7 @@ from control.inbox import default_inbox
 from control.intake import submit_goal, submit_plan
 from infra.atomic_io import read_json, write_json_atomic
 from infra.event_store import EventStore
+from infra.llm import is_transient_cause
 
 
 def _state_root() -> Path:
@@ -48,12 +51,20 @@ def escalations(store: EventStore) -> list[dict]:
     status: dict[str, str] = {}
     confirmed: set[str] = set()
     raw: dict[str, dict] = {}
+    esc_order: dict[str, int] = {}                # escalated task_id -> when it was escalated
+    instructed: dict[str, int] = {}              # project -> when it was last given an oversee task
+    order = 0
     for ev in store.replay():
+        order += 1
         d = ev.data
         if ev.kind == "task_created":
             t = d["task"]
             created.append((t["task_id"], t.get("project", ""), t.get("task_type", "")))
             status[t["task_id"]] = t.get("status", "queued")
+            # A non-meta oversee task is the durable trace of "you (or the stall-guard) acted on this
+            # project". One created AFTER an escalation = a response to it -> the escalation is handled.
+            if t.get("task_type") == "oversee" and not t.get("project", "").startswith("__"):
+                instructed[t.get("project", "")] = order
         elif ev.kind == "task_transition" and d["task_id"] in status:
             status[d["task_id"]] = d["to"]
         elif ev.kind == "project_confirmed":
@@ -63,6 +74,7 @@ def escalations(store: EventStore) -> list[dict]:
                 "task_id": d["task_id"], "cause": d.get("cause", ""),
                 "reason": d.get("reason", ""), "project": d.get("project", ""),
             }
+            esc_order[d["task_id"]] = order
     proj_of = {tid: p for tid, p, _ in created}
     type_of = {tid: ty for tid, _, ty in created}
 
@@ -78,8 +90,17 @@ def escalations(store: EventStore) -> list[dict]:
     out: list[dict] = []
     for tid, esc in raw.items():
         project = esc["project"] or proj_of.get(tid, "")
-        if (project and project in confirmed) or superseded(tid, project, type_of.get(tid, "")):
+        if project.startswith("__"):
+            continue                              # the orchestrator's own meta-tasks (e.g. __overseer__)
+            # — internal plumbing, not your decision; surfaced in the activity feed, not the tray
+        if is_transient_cause(esc["cause"]):
+            continue                              # restart-kills / rate limits are never real defects
+        if project and project in confirmed:
             continue
+        if superseded(tid, project, type_of.get(tid, "")):
+            continue
+        if project and instructed.get(project, -1) > esc_order.get(tid, 0):
+            continue                              # you've since instructed it -> it's being handled, not waiting
         esc["project"] = project
         out.append(esc)
     return sorted(out, key=lambda e: e["task_id"])
@@ -93,15 +114,132 @@ def _budget_spent(budget_log: Path | str) -> float:
                      for e in EventStore(budget_log).replay() if e.kind == "spend"), 4)
 
 
+def health(tasks_log: Path | str) -> dict:
+    """A live heartbeat for the GUI: how long since the daemon last wrote an event (it writes on every
+    cycle), whether that counts as alive, and a one-line count of what each task is doing right now.
+    Lets you see the orchestrator is working without asking anyone."""
+    p = Path(tasks_log)
+    age = round(time.time() - p.stat().st_mtime, 1) if p.exists() else None
+    counts: Counter = Counter()
+    if p.exists():
+        st: dict[str, str] = {}
+        for ev in EventStore(p).replay():
+            d = ev.data
+            if ev.kind == "task_created":
+                st[d["task"]["task_id"]] = d["task"].get("status", "queued")
+            elif ev.kind == "task_transition" and d["task_id"] in st:
+                st[d["task_id"]] = d["to"]
+        counts = Counter(st.values())
+    running, queued = counts.get("in_progress", 0), counts.get("queued", 0)
+    # A task in progress means it's WORKING (an agent call can legitimately run for minutes) — never
+    # call that 'stopped'. Only 'stalled?' when nothing's running yet work is queued and it's gone
+    # quiet (likely the daemon died), and 'idle' when there's simply nothing to do.
+    if running > 0:
+        status = "working"
+    elif age is None:
+        status = "no activity yet"
+    elif age < 120:
+        status = "live"
+    elif queued > 0:
+        status = "stalled?"
+    else:
+        status = "idle"
+    return {
+        "last_activity_s": age,
+        "status": status,
+        "alive": running > 0 or (age is not None and age < 120),
+        "running": running,
+        "queued": queued,
+        "done": counts.get("done", 0),
+        "failed": counts.get("failed", 0),
+    }
+
+
+def activity(store: EventStore, *, limit: int = 20) -> list[dict]:
+    """A human-readable, timestamped feed of the meaningful things the orchestrator has DONE recently
+    (overseer actions, judge verdicts, ready-for-you, real failures, escalations, confirmations, new
+    work). Newest first, capped. Noise (every task transition, transient restart-kills) is omitted."""
+    task_type: dict[str, str] = {}
+    feed: list[dict] = []
+
+    def add(ts: float, text: str) -> None:
+        feed.append({"ts": ts, "text": text[:160]})
+
+    for ev in store.replay():
+        d, ts = ev.data, ev.ts
+        if ev.kind == "task_created":
+            t = d["task"]
+            task_type[t["task_id"]] = t.get("task_type", "")
+            proj, tt = t.get("project", ""), t.get("task_type", "")
+            if tt == "plan":
+                add(ts, f"planning — {proj}")
+            elif tt == "control":
+                p = t.get("payload", {}) or {}
+                add(ts, f"{p.get('directive', 'control')} — {p.get('project', proj)}")
+        elif ev.kind == "task_result":
+            tt = task_type.get(d["task_id"], "")
+            ok, summ, cause = d.get("ok"), d.get("summary") or "", d.get("cause") or ""
+            if tt == "oversee" and ok:
+                add(ts, f"overseer — {summ}")
+            elif tt == "validate":
+                add(ts, f"judge — {summ if ok else 'rejected: ' + cause}")
+            elif not ok and not is_transient_cause(cause):
+                add(ts, f"failed — {summ}: {cause}")
+        elif ev.kind == "project_status" and d.get("pending_user"):
+            add(ts, f"ready for sign-off — {d.get('project', '')}")
+        elif ev.kind == "assurance_result" and not d.get("fully_hardened"):
+            add(ts, f"not ship-ready — {d.get('project', '')}: {d.get('reason', '')}")
+        elif ev.kind == "escalation" and not is_transient_cause(d.get("cause", "")):
+            add(ts, f"needs you — {d.get('project', '') or d.get('task_id', '')}")
+        elif ev.kind == "project_confirmed":
+            add(ts, f"you confirmed — {d.get('project', '')}")
+    return list(reversed(feed[-limit:]))               # most recent first
+
+
+def project_overview(store: EventStore) -> dict:
+    """Every project that exists, with its LIVE task counts — so in-flight projects show on the
+    dashboard immediately, not only after they drain and get evaluated. Merges in the finalised
+    flags (confirmed/hardened) for projects that have reached an evaluation."""
+    task_proj: dict[str, str] = {}
+    task_status: dict[str, str] = {}
+    for ev in store.replay():
+        d = ev.data
+        if ev.kind == "task_created":
+            t = d["task"]
+            task_proj[t["task_id"]] = t.get("project", "")
+            task_status[t["task_id"]] = t.get("status", "queued")
+        elif ev.kind == "task_transition" and d["task_id"] in task_status:
+            task_status[d["task_id"]] = d["to"]
+    counts: dict[str, Counter] = {}
+    for tid, proj in task_proj.items():
+        if proj.startswith("__"):
+            continue                          # hide the overseer's own meta-tasks
+        counts.setdefault(proj, Counter())[task_status[tid]] += 1
+    folded = project_states(store)
+    projects = sorted(p for p in set(counts) | set(folded) if not p.startswith("__"))
+    out = {}
+    for proj in projects:
+        c = counts.get(proj, Counter())
+        info = folded.get(proj, {})
+        out[proj] = {
+            "running": c.get("in_progress", 0), "queued": c.get("queued", 0),
+            "done": c.get("done", 0), "failed": c.get("failed", 0),
+            "confirmed": bool(info.get("confirmed")), "hardened": bool(info.get("hardened")),
+        }
+    return out
+
+
 def build_state(*, tasks_log: Path | None = None, budget_log: Path | None = None) -> dict:
     """Fold the durable logs into the Da Nang view model (pure: no live repo, no side effects)."""
     tasks_log = tasks_log or default_log()
     budget_log = budget_log or (_state_root() / "budget.events.log")
     store = EventStore(tasks_log)
     return {
-        "projects": project_states(store),
+        "projects": project_overview(store),
         "pending": pending(store),
         "escalations": escalations(store),
+        "health": health(tasks_log),
+        "activity": activity(store),
         "budget": {"spent_usd": _budget_spent(budget_log)},
     }
 
@@ -338,9 +476,11 @@ _PAGE = """<!doctype html>
   .chk { display: flex; align-items: center; gap: 8px; font-size: .9rem; }
 </style></head><body>
 <header><h1>Orchestrator</h1><span class="spend" id="spend"></span></header>
+<div id="health" class="spend" style="margin:-4px 0 4px"></div>
 
 <h2>Needs you</h2><div id="needs"></div>
 <h2>Projects</h2><div id="projects"></div>
+<h2>Recent activity</h2><div id="activity"></div>
 <h2>New goal</h2>
 <form id="goal-form" class="card">
   <input type="text" id="g-goal" placeholder="What should it build?" required>
@@ -368,6 +508,16 @@ let STATE = {projects:{}, pending:[], escalations:[], budget:{}};
 async function refresh() {
   STATE = await api('/api/state');
   $('spend').textContent = '$' + (STATE.budget.spent_usd ?? 0).toFixed(4) + ' spent';
+  const h = STATE.health || {};
+  const age = h.last_activity_s;
+  const ago = age == null ? 'no activity yet' : age < 90 ? Math.round(age)+'s ago'
+            : age < 5400 ? Math.round(age/60)+'m ago' : Math.round(age/3600)+'h ago';
+  const label = {working:'● working', live:'● live', idle:'○ idle',
+    'stalled?':'⚠ stalled?', 'no activity yet':'○ no activity yet'}[h.status]
+    || (h.alive ? '● live' : '○ idle');
+  $('health').textContent = label +
+    ` · last activity ${ago} · ${h.running||0} running, ${h.queued||0} queued, `
+    + `${h.done||0} done, ${h.failed||0} failed`;
   const needs = [];
   STATE.pending.forEach((p, i) => needs.push(`<div class="card"><div class="row">
     <span class="name">${p}</span>
@@ -382,12 +532,19 @@ async function refresh() {
   const ps = Object.entries(STATE.projects);
   $('projects').innerHTML = ps.length ? ps.map(([n,st]) => {
     const b = [];
-    if (st.confirmed) b.push('done'); else if (st.pending_user) b.push('awaiting you');
+    if (st.confirmed) b.push('done');
     if (st.hardened) b.push('hardened');
-    if (st.assurance_reason) b.push(st.assurance_reason);
-    return `<div class="card"><span class="name">${n}</span>
-      <div class="badges">${b.map(badge).join('')}</div></div>`;
+    const counts = `${st.running||0} running · ${st.queued||0} queued · ${st.done||0} done`
+      + (st.failed ? ` · ${st.failed} failed` : '');
+    return `<div class="card"><div class="row"><span class="name">${n}</span>
+      <span class="muted" style="font-size:.85rem">${counts}</span></div>
+      ${b.length ? `<div class="badges">${b.map(badge).join('')}</div>` : ''}</div>`;
   }).join('') : '<p class="muted">No projects yet.</p>';
+  $('activity').innerHTML = (STATE.activity || []).map(a => {
+    const t = new Date(a.ts * 1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+    return `<div class="card" style="padding:8px 12px"><span class="muted"
+      style="font-variant-numeric:tabular-nums; margin-right:8px">${t}</span>${a.text}</div>`;
+  }).join('') || '<p class="muted">No activity yet.</p>';
 }
 async function confirmProject(p){ await api('/api/confirm', {project:p}); refresh(); }
 async function declinePending(i){

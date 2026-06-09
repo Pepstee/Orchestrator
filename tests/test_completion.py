@@ -6,19 +6,21 @@ from pathlib import Path
 from validation.gates import evaluate_completion, run_test_gate
 
 
-def test_all_four_gates_pass_is_done():
-    r = evaluate_completion({"tests": True, "acceptance": True, "judge": True, "user": True})
+def test_all_gates_pass_is_done():
+    r = evaluate_completion({"tests": True, "acceptance": True, "judge": True,
+                             "authenticity": True, "user": True})
     assert r.done and r.unmet == []
 
 
-def test_missing_user_gate_blocks_done():
-    # all automated gates pass, but no user confirmation yet -> not done (two-tier contract)
-    r = evaluate_completion({"tests": True, "acceptance": True, "judge": True})
-    assert not r.done and "user" in r.unmet
+def test_missing_automated_gate_blocks_done():
+    # a missing automated gate blocks completion; there is NO human gate anymore
+    r = evaluate_completion({"tests": True, "acceptance": True, "judge": True})  # missing authenticity
+    assert not r.done and "authenticity" in r.unmet and "user" not in r.unmet
 
 
 def test_failed_gate_is_listed():
-    r = evaluate_completion({"tests": True, "acceptance": False, "judge": True, "user": True})
+    r = evaluate_completion({"tests": True, "acceptance": False, "judge": True,
+                             "authenticity": True, "user": True})
     assert not r.done and r.unmet == ["acceptance"]
 
 

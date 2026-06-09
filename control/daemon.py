@@ -23,9 +23,9 @@ from typing import Callable
 from control.budget import BudgetGovernor
 from control.confirm import ingest_confirmations
 from control.inbox import ingest
-from control.loop import run as run_loop
+from control.pool import DEFAULT_MAX_WORKERS, run_concurrent
 from control.project import DEFAULT_TEST_COMMAND, ProjectOutcome, evaluate_project
-from core.models import Task, TaskStatus
+from core.models import Event, Task, TaskStatus
 from dispatch.dispatcher import Invoke, PAConsult, propagate_prerequisite_failures
 from dispatch.repository import TaskRepository
 from dispatch.runner import make_subprocess_invoke
@@ -33,6 +33,13 @@ from infra import pidlock
 from infra.event_store import EventStore
 from infra.notify import notify
 from infra.workspace import default_projects_root, resolve_project_dir
+from memory.overseer import (
+    due_for_reset,
+    due_for_succession,
+    load_handoff,
+    load_session,
+    start_session,
+)
 from pa.overseer import evolve as evolve_pa
 from pa.rules import consult, load_rules, save_rules
 from validation.assurance import Tier, hardening_tiers, run_assurance
@@ -60,10 +67,17 @@ MAX_OVERSEER_INTERVENTIONS = 3
 # Heartbeat: ping a status summary at least this often, regardless of progress.
 HEARTBEAT_SECONDS = 12 * 3600
 
+# The persistent Overseer meta-agent. Its observe/succession tasks live under a RESERVED project name
+# so they are never mistaken for a buildable project by monitor_projects. It "thinks" on a pulse.
+OVERSEER_PROJECT = "__overseer__"
+OVERSEER_PULSE_SECONDS = 3600
+
 
 def _status_summary(repo: TaskRepository) -> str:
     by_project: dict[str, list] = {}
     for t in repo.list():
+        if t.project.startswith("__"):
+            continue                          # reserved meta-projects aren't user-facing work
         by_project.setdefault(t.project, []).append(t.status)
     if not by_project:
         return "orchestrator running — no projects yet"
@@ -105,6 +119,30 @@ def _project_state(repo: TaskRepository, project: str, root: Path) -> dict:
             "state": {"done": done, "failed": failed, "files": files}}
 
 
+def _advance_stalled(repo: TaskRepository, project: str, root: Path, *, reason: str, gates: dict) -> None:
+    """The planner is spent (or quality is unmet): dispatch the OVERSEER to diagnose and fix (bounded
+    by MAX_OVERSEER_INTERVENTIONS), and only once the overseer is also exhausted escalate to the user.
+    Single source of truth for 'a project that can't finish itself' — used by both the gates-unmet and
+    the failed-assurance paths so a sub-par project is never pinged as done."""
+    oversee_passes = sum(1 for t in repo.list() if t.project == project and t.task_type == "oversee")
+    st = _project_state(repo, project, root)
+    if oversee_passes < MAX_OVERSEER_INTERVENTIONS:
+        instruction = (
+            f"This project is NOT ship-ready — {reason} (gates={gates}). Run the test suite, find why "
+            "it falls short, fix the code so the quality bar is met, then it will be re-validated."
+        )
+        repo.create(Task(task_id=uuid.uuid4().hex[:12], title=instruction, task_type="oversee",
+                         project=project, acceptance_criteria=st["acceptance"],
+                         payload={"context": json.dumps(st["state"])}))   # overseer steps in (L6-bounded)
+        notify("Orchestrator", f"{project} not ship-ready — overseer stepping in")
+    else:
+        # Planner AND overseer both exhausted. The operator is NOT in the loop, so we do NOT park this
+        # waiting on them — the orchestrator decides: give up on this project (logged), free the slot,
+        # keep working on everything else. It can always be re-enqueued later.
+        repo.record_abandoned(project, reason=f"{reason}; planner and overseer both exhausted")
+        notify("Orchestrator", f"{project} abandoned — could not complete it autonomously")
+
+
 def monitor_projects(
     repo: TaskRepository,
     evaluated: dict[str, frozenset],
@@ -123,6 +161,8 @@ def monitor_projects(
     root = Path(projects_root) if projects_root else default_projects_root()
     outcomes: list[ProjectOutcome] = []
     for project in sorted({t.project for t in repo.list()}):
+        if project.startswith("__"):
+            continue                                  # reserved (e.g. the overseer's own meta-tasks)
         if not _all_terminal(repo, project):
             continue
         sig = _signature(repo, project)
@@ -131,44 +171,149 @@ def monitor_projects(
         evaluated[project] = sig
         outcome = evaluate_project(repo, project=project, projects_root=projects_root,
                                    test_command=test_command)
-        repo.record_project_status(project, gates=outcome.gates, pending_user=outcome.pending_user)
+        repo.record_project_status(project, gates=outcome.gates, pending_user=outcome.complete)
         outcomes.append(outcome)
 
-        if outcome.pending_user:                      # 3/4 gates -> instant ping, keep hardening
-            notify("Orchestrator", f"{project} is ready for your confirmation")
+        if outcome.complete:
+            # All automated gates pass — but quality must come back CLEAN before it counts as done.
+            # Run the ship-readiness ladder (tests rerun -> mutation -> acceptance-by-execution ->
+            # adversarial). Clean => the orchestrator SELF-CERTIFIES done (no human gate). A finding
+            # is NOT done and goes to the overseer.
             assurance = run_assurance(str(resolve_project_dir(root, project)), tiers,
                                       should_stop=should_stop, governor=governor)
             repo.record_assurance(project, fully_hardened=assurance.fully_hardened,
                                   reason=assurance.stopped_reason)
+            if assurance.fully_hardened:
+                repo.record_confirmation(project)   # certified at scope — shippable now, no human gate
+                # FOREVER-IMPROVE: don't stop at 'good enough'. As long as the last round actually
+                # produced integrated work, open another improvement round (security, tests, UX, perf,
+                # GUI, cleaner code, better features...). It stops on its own only when a round finds
+                # genuinely nothing left to improve (planner returns []) — no tight empty loop.
+                if not _planner_done(repo, project):
+                    st = _project_state(repo, project, root)
+                    repo.create(Task(task_id=uuid.uuid4().hex[:12], title=st["goal"], task_type="plan",
+                                     project=project, acceptance_criteria=st["acceptance"],
+                                     payload={"mode": "improve", "state": st["state"]}))
+                else:
+                    notify("Orchestrator", f"{project} is DONE — self-certified and fully polished")
+            else:
+                _advance_stalled(repo, project, root,
+                                 reason=f"not ship-ready ({assurance.stopped_reason})", gates=outcome.gates)
             continue
 
-        # Gates unmet — advance the project, escalating to the user only as the LAST resort:
-        #   1. planner still has moves      -> replan (next increment)
-        #   2. planner spent, overseer left -> the overseer diagnoses + fixes (don't stall)
-        #   3. both spent                   -> escalate (genuinely stuck)
+        # Deterministic gates unmet — advance the project, escalating only as the LAST resort:
+        #   1. planner still has moves -> replan (next increment)
+        #   2. planner spent           -> overseer fixes, then (if exhausted) escalate
         plan_passes = sum(1 for t in repo.list() if t.project == project and t.task_type == "plan")
-        oversee_passes = sum(1 for t in repo.list() if t.project == project and t.task_type == "oversee")
         planner_spent = plan_passes >= MAX_PLAN_ITERATIONS or _planner_done(repo, project)
-        st = _project_state(repo, project, root)
         if not planner_spent:
+            st = _project_state(repo, project, root)
             repo.create(Task(task_id=uuid.uuid4().hex[:12], title=st["goal"], task_type="plan",
                              project=project, acceptance_criteria=st["acceptance"],
                              payload={"state": st["state"]}))   # next planning pass (the replan loop)
-        elif oversee_passes < MAX_OVERSEER_INTERVENTIONS:
-            instruction = (
-                f"This project has STALLED — the automated gates are not all passing (gates={outcome.gates}) "
-                "and the planner has no further steps. Run the test suite, find why it fails, fix the code "
-                "so the tests pass and the goal is met, then it will be re-validated."
-            )
-            repo.create(Task(task_id=uuid.uuid4().hex[:12], title=instruction, task_type="oversee",
-                             project=project, acceptance_criteria=st["acceptance"],
-                             payload={"context": json.dumps(st["state"])}))   # overseer steps in (L6-bounded)
-            notify("Orchestrator", f"{project} stalled — overseer stepping in")
         else:
-            repo.record_escalation(f"{project}:stuck", cause="gates unmet; planner and overseer both exhausted",
-                                   reason="needs you", project=project)
-            notify("Orchestrator", f"{project} needs you — overseer couldn't unstick it")
+            _advance_stalled(repo, project, root,
+                             reason="gates unmet; planner has no further steps", gates=outcome.gates)
     return outcomes
+
+
+def _enqueue_meta(repo: TaskRepository, mode: str, session_id: str, *, resume: bool, context: str) -> None:
+    """Enqueue an overseer meta-task (observe / succession) bound to the persistent session."""
+    repo.create(Task(
+        task_id=uuid.uuid4().hex[:12],
+        title=f"overseer {mode}",
+        task_type="oversee",
+        project=OVERSEER_PROJECT,
+        payload={"mode": mode, "session_id": session_id, "resume": resume, "context": context},
+    ))
+
+
+def tick_overseer_session(
+    repo: TaskRepository,
+    session_path: Path,
+    handoff_path: Path,
+    meta: dict,
+    *,
+    now: float | None = None,
+    pulse_interval: float = OVERSEER_PULSE_SECONDS,
+) -> None:
+    """Drive the persistent Overseer's session on a clock (the meta-agent's heartbeat):
+      - on boot / at the reset interval -> start a FRESH session, seed it with the last handoff, and
+        open it with a first observe pass (resume=False creates the Claude session);
+      - within `lead` of the wipe -> enqueue a succession task so it writes its handoff in time;
+      - otherwise, every `pulse_interval` -> an observe pass so it reasons continuously.
+    All meta-tasks resume the SAME session, giving continuity of reasoning; the daily reset bounds
+    context growth (A3), with the handoff carrying memory across the wipe."""
+    now = time.time() if now is None else now
+    session = load_session(session_path)
+    if session is None or due_for_reset(session, now=now):
+        rotating = session is not None
+        session = start_session(session_path, now=now)
+        meta["last_pulse"] = now
+        meta["succession_for"] = ""
+        meta["opened"] = session.session_id
+        seed = load_handoff(handoff_path)
+        ctx = (f"Handoff from your previous session (your only memory of it):\n{seed}\n\n"
+               if seed else "") + _status_summary(repo)
+        _enqueue_meta(repo, "observe", session.session_id, resume=False, context=ctx)  # create + wake
+        if rotating:
+            notify("Overseer", "session reset — fresh cycle, seeded from handoff")
+        return
+
+    if due_for_succession(session, now=now) and meta.get("succession_for") != session.session_id:
+        _enqueue_meta(repo, "succession", session.session_id, resume=True, context=_status_summary(repo))
+        meta["succession_for"] = session.session_id
+        return
+
+    if now - meta.get("last_pulse", 0.0) >= pulse_interval:
+        _enqueue_meta(repo, "observe", session.session_id, resume=True, context=_status_summary(repo))
+        meta["last_pulse"] = now
+
+
+def abandon_project(repo: TaskRepository, project: str, *, reason: str) -> int:
+    """Cancel every non-terminal task of a doomed project (the overseer's abandon authority). Logged
+    and reversible — the goal can be re-enqueued later; this only stops it burning cycles. Returns
+    the count cancelled."""
+    cancelled = 0
+    for task in list(repo.list()):
+        if task.project == project and task.status in (
+                TaskStatus.QUEUED, TaskStatus.IN_PROGRESS, TaskStatus.BLOCKED):
+            repo.cancel_task(task.task_id, cause=f"abandoned by overseer: {reason}"[:200])
+            cancelled += 1
+    return cancelled
+
+
+def reprioritise_project(repo: TaskRepository, project: str, priority: int) -> int:
+    """Set the scheduling priority of a project's queued tasks (the overseer steering what runs next).
+    Returns the count adjusted."""
+    n = 0
+    for task in repo.list(TaskStatus.QUEUED):
+        if task.project == project:
+            repo.set_priority(task.task_id, priority)
+            n += 1
+    return n
+
+
+def process_overseer_control(repo: TaskRepository) -> None:
+    """Execute the overseer's queued control directives (it spawns these as `control` tasks, which the
+    dispatcher never runs as agents). Each is claimed, executed, and completed — so it is terminal and
+    durably logged. Guardrails: reserved/empty targets are ignored; the orchestrator is never a target."""
+    for task in [t for t in repo.list(TaskStatus.QUEUED) if t.task_type == "control"]:
+        p = task.payload if isinstance(task.payload, dict) else {}
+        directive = p.get("directive")
+        target = str(p.get("project", "")).strip()
+        repo.apply(task.task_id, Event.CLAIM)
+        if target and not target.startswith("__"):
+            if directive == "abandon":
+                n = abandon_project(repo, target, reason=str(p.get("reason", "")))
+                notify("Overseer", f"abandoned {target}: {n} task(s) cancelled — {str(p.get('reason',''))[:80]}")
+            elif directive == "reprioritise":
+                try:
+                    pri = int(p.get("priority", 0))
+                except (TypeError, ValueError):
+                    pri = 0
+                reprioritise_project(repo, target, pri)
+        repo.apply(task.task_id, Event.COMPLETE)
 
 
 def serve(
@@ -179,20 +324,32 @@ def serve(
     should_stop: Callable[[], bool],
     poll_interval: float = 2.0,
     batch: int = 50,
+    max_workers: int = DEFAULT_MAX_WORKERS,
+    project_cap: int = 1,
     inbox: str | None = None,
     on_cycle: Callable[[], None] | None = None,
     pa_consult: PAConsult | None = None,
 ) -> int:
-    """Run ready tasks until should_stop(), ingesting newly-enqueued work each cycle and running an
-    optional per-cycle hook (project monitoring). Sleeps when idle. Returns total tasks processed."""
-    total = 0
-    while not should_stop():
+    """Run ready tasks CONCURRENTLY (up to max_workers agents at once) until should_stop(), ingesting
+    newly-enqueued work each cycle and running an optional per-cycle hook (project monitoring). Sleeps
+    when idle. `project_cap` bounds concurrent agents per project (default 1 — one writer per project
+    tree, no intra-project merge conflicts; projects still run in parallel). Returns total processed."""
+    def _maintain() -> None:
+        # The per-cycle housekeeping, defined once. Passed into run_concurrent so it also runs DURING a
+        # long batch (not only between batches) — a never-idle pool can't starve the overseer pulse or
+        # leave a failed prerequisite stranding the rest of a graph.
         ingest(repo, inbox)
-        processed = run_loop(repo, invoke, governor, max_steps=batch, pa_consult=pa_consult)
-        propagate_prerequisite_failures(repo)   # don't let a few failures strand the rest of the graph
-        total += processed
+        propagate_prerequisite_failures(repo)
         if on_cycle is not None:
             on_cycle()
+
+    total = 0
+    while not should_stop():
+        _maintain()
+        processed = run_concurrent(repo, invoke, governor, max_workers=max_workers,
+                                   project_cap=project_cap, max_steps=batch, pa_consult=pa_consult,
+                                   should_stop=should_stop, maintenance=_maintain)
+        total += processed
         if processed == 0:
             time.sleep(poll_interval)
     return total
@@ -215,6 +372,7 @@ def main() -> None:
 
     repo = TaskRepository.replay(EventStore(state / "tasks.events.log"))
     repo.reclaim_orphans()   # crash/restart recovery: re-queue tasks orphaned mid-flight (e.g. the 5h restart)
+    repo.revive_transient_failures()   # a limit/restart/merge-conflict failure is never terminal — retry it (clears stale escalations)
     governor = BudgetGovernor(
         EventStore(state / "budget.events.log"),
         cap_usd=float(os.environ.get("AGENTIC_BUDGET_USD", "10.0")),
@@ -227,11 +385,16 @@ def main() -> None:
 
     evaluated: dict[str, frozenset] = {}
     pa_path = state / "pa_rules.json"
+    session_path = state / "overseer_session.json"
+    handoff_path = state / "handoff_latest.md"
     heartbeat = {"last": time.time()}
+    overseer_meta: dict = {}
 
     def on_cycle() -> None:
         ingest_confirmations(repo)   # apply any user confirmations (the fourth gate)
         monitor_projects(repo, evaluated, governor=governor, should_stop=should_stop)
+        tick_overseer_session(repo, session_path, handoff_path, overseer_meta)  # the meta-agent's heartbeat
+        process_overseer_control(repo)   # execute the overseer's abandon directives
         rules = load_rules(pa_path)  # overseer evolves the PA from recurring failures (curated)
         evolve_pa(rules, repo.failure_causes())
         save_rules(pa_path, rules)
@@ -242,9 +405,11 @@ def main() -> None:
     def pa_consult(cause: str) -> str | None:
         return consult(cause, load_rules(pa_path))   # live fast-path over the active PA rules
 
+    max_workers = max(1, int(os.environ.get("AGENTIC_MAX_WORKERS", str(DEFAULT_MAX_WORKERS))))
+    project_cap = max(0, int(os.environ.get("AGENTIC_PROJECT_CONCURRENCY", "1")))
     try:
         serve(repo, governor, make_subprocess_invoke(), should_stop=should_stop,
-              on_cycle=on_cycle, pa_consult=pa_consult)
+              max_workers=max_workers, project_cap=project_cap, on_cycle=on_cycle, pa_consult=pa_consult)
     finally:
         pidlock.release(lock)
 

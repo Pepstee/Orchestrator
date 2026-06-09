@@ -11,6 +11,7 @@ from typing import Callable
 
 from core.models import AgentResult, Event, Task, TaskStatus
 from dispatch.repository import TaskRepository
+from infra.llm import RATE_LIMIT_HINTS, is_transient_cause   # single source of limit/transient classification
 
 # An invoke takes a task and returns its AgentResult (subprocess agent, or a test stub).
 Invoke = Callable[[Task], AgentResult]
@@ -21,15 +22,19 @@ PAConsult = Callable[[str], "str | None"]
 # Bound dynamic decomposition: a single task may spawn at most this many sub-tasks (law L6).
 MAX_SPAWNED_PER_TASK = 50
 
-# A provider usage/rate limit is transient (it resets) — not a task failure. The cause carries the
-# RateLimited marker from infra.llm (or the provider's own wording).
-_RATE_LIMIT_HINTS = ("ratelimited", "rate limit", "usage limit", "429", "quota",
-                     "too many requests", "overloaded")
-
 
 def is_rate_limited(result: AgentResult) -> bool:
+    """A provider usage/rate limit is transient (it resets) — NOT a task failure. Detected from the
+    cause wording (the RateLimited marker, or the provider's own message, e.g. '5-hour limit reached')."""
     cause = (result.cause or "").lower()
-    return bool(cause) and any(hint in cause for hint in _RATE_LIMIT_HINTS)
+    return bool(cause) and any(hint in cause for hint in RATE_LIMIT_HINTS)
+
+
+def is_transient(result: AgentResult) -> bool:
+    """A transient infra condition that is NOT the task's fault (provider limit, or a restart-kill).
+    Such a task is requeued and retried, never failed or escalated — otherwise a restart manufactures
+    phantom 'needs you' escalations. Classification lives once in infra.llm.is_transient_cause."""
+    return is_transient_cause(result.cause or "")
 
 
 def is_ready(repo: TaskRepository, task: Task) -> bool:
@@ -44,10 +49,15 @@ def is_ready(repo: TaskRepository, task: Task) -> bool:
 
 
 def select_next_task(repo: TaskRepository) -> Task | None:
-    for task in repo.list(TaskStatus.QUEUED):
-        if is_ready(repo, task):
-            return task
-    return None
+    ready = [
+        task for task in repo.list(TaskStatus.QUEUED)
+        if task.task_type != "control"   # control directives are executed by the daemon, never run as agents
+        and is_ready(repo, task)
+    ]
+    if not ready:
+        return None
+    # Highest priority first; ties keep creation order (max returns the first maximal element).
+    return max(ready, key=lambda t: t.priority)
 
 
 def run_one(
@@ -67,17 +77,23 @@ def run_one(
     repo.apply(task.task_id, Event.CLAIM)            # QUEUED -> IN_PROGRESS
     result = invoke(task)
     repo.record_result(task.task_id, result)         # persist ok/summary/cause (audit, L10)
-    if result.ok:
-        if result.spawned_tasks:                     # dynamic decomposition (bounded, L6)
-            for spec in result.spawned_tasks[:MAX_SPAWNED_PER_TASK]:
-                try:
-                    repo.create(Task.from_dict(spec))
-                except (KeyError, TypeError, ValueError):
-                    pass  # malformed spawn spec — skip, never crash the loop
-        repo.apply(task.task_id, Event.COMPLETE)
-        return task, result
-    _handle_failure(repo, task, result, pa_consult)
+    settle(repo, task, result, pa_consult=pa_consult)
     return task, result
+
+
+def settle(repo: TaskRepository, task: Task, result: AgentResult, *, pa_consult: PAConsult | None = None) -> None:
+    """Apply an agent's result to its task: on success enqueue any (bounded) spawned tasks and
+    COMPLETE; on failure run the failure ladder. Shared by the sequential and concurrent drivers so
+    decomposition + the failure ladder behave identically whichever drives the loop."""
+    if result.ok:
+        for spec in result.spawned_tasks[:MAX_SPAWNED_PER_TASK]:
+            try:
+                repo.create(Task.from_dict(spec))
+            except (KeyError, TypeError, ValueError):
+                pass  # malformed spawn spec — skip, never crash the loop
+        repo.apply(task.task_id, Event.COMPLETE)
+    else:
+        _handle_failure(repo, task, result, pa_consult)
 
 
 def _handle_failure(
@@ -86,9 +102,9 @@ def _handle_failure(
     result: AgentResult,
     pa_consult: PAConsult | None,
 ) -> None:
-    """The failure ladder: rate-limit backoff -> PA fast-path -> retry -> escalate."""
-    if is_rate_limited(result):
-        repo.apply(task.task_id, Event.REQUEUE)   # transient provider limit: retry later, no penalty, no escalation
+    """The failure ladder: transient requeue -> PA fast-path -> retry -> escalate."""
+    if is_transient(result):
+        repo.apply(task.task_id, Event.REQUEUE)   # provider limit OR restart-kill: retry, no penalty, no escalation
         return
     action = pa_consult(result.cause or "") if pa_consult else None
     if action == "requeue":                          # PA: transient — retry without penalty

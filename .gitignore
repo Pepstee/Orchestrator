@@ -11,3 +11,13 @@ __pycache__/
 .ruff_cache/
 *.egg-info/
 .venv/
+
+# runtime sentinels / logs
+STOP
+supervisor.log
+
+# generated artefacts & archives
+graphify-out/
+projects.archived-*
+pytest-cache-files-*/
+.import_linter_cache/

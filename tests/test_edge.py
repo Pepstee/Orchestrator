@@ -13,7 +13,16 @@ from pathlib import Path
 
 from control.confirm import request_confirmation
 from control.intake import submit_goal, submit_plan
-from edge.server import _cookie_token, _lan_ip, authorised, build_state, escalations, load_or_create_token
+from edge.server import (
+    _cookie_token,
+    _lan_ip,
+    activity,
+    authorised,
+    build_state,
+    escalations,
+    health,
+    load_or_create_token,
+)
 from infra.event_store import EventStore
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -32,6 +41,113 @@ def test_build_state_folds_the_da_nang_view(tmp_path: Path):
     assert st["projects"]["demo"]["hardened"] is True
     assert st["escalations"][0]["task_id"] == "t1"
     assert st["budget"]["spent_usd"] == 0.25
+
+
+def test_escalation_clears_once_the_project_is_instructed(tmp_path: Path):
+    """The 'never disappears' bug: instructing a project (a later oversee task) must drop its
+    escalation from the tray — otherwise the card lingers forever after you've acted."""
+    s = EventStore(tmp_path / "e.log")
+    s.append("task_created", {"task": {"task_id": "b1", "project": "demo",
+                                       "task_type": "implement", "status": "failed"}})
+    s.append("escalation", {"task_id": "b1", "project": "demo", "cause": "boom", "reason": "stuck"})
+    assert any(e["task_id"] == "b1" for e in escalations(s))          # shown while unaddressed
+    s.append("task_created", {"task": {"task_id": "o1", "project": "demo",
+                                       "task_type": "oversee", "status": "queued"}})
+    assert not any(e["task_id"] == "b1" for e in escalations(s))      # cleared once instructed
+
+
+def test_reserved_project_escalations_are_not_in_the_tray(tmp_path: Path):
+    """The overseer's own plumbing failures (__overseer__) are diagnostics for the feed, not user
+    decisions — they must never clutter the 'needs you' tray."""
+    s = EventStore(tmp_path / "e.log")
+    s.append("escalation", {"task_id": "o1", "project": "__overseer__", "reason": "retries exhausted",
+                            "cause": "claude exited 1: Invalid session ID"})
+    s.append("escalation", {"task_id": "r1", "project": "deal-sniper-v3", "reason": "retries exhausted",
+                            "cause": "repository is empty"})
+    shown = {e["task_id"] for e in escalations(s)}
+    assert shown == {"r1"}                       # the real project escalation stays; the meta one is hidden
+
+
+def test_transient_cause_escalations_are_never_shown(tmp_path: Path):
+    """A restart-kill (KeyboardInterrupt) or rate-limit escalation is never a real defect — it must
+    not appear in the tray, even from the historical backlog before the fix."""
+    s = EventStore(tmp_path / "e.log")
+    s.append("escalation", {"task_id": "k1", "project": "demo", "reason": "pa:escalate",
+                            "cause": "Traceback ... selectors.py ... KeyboardInterrupt"})
+    s.append("escalation", {"task_id": "r1", "project": "demo", "reason": "pa:escalate",
+                            "cause": "claude: 5-hour limit reached"})
+    s.append("escalation", {"task_id": "real", "project": "demo", "reason": "stuck",
+                            "cause": "AssertionError: expected 5 got 4"})
+    shown = {e["task_id"] for e in escalations(s)}
+    assert shown == {"real"}                          # only the genuine defect remains
+
+
+def test_activity_feed_is_readable_newest_first(tmp_path: Path):
+    s = EventStore(tmp_path / "e.log")
+    s.append("task_created", {"task": {"task_id": "v1", "project": "demo", "task_type": "validate"}})
+    s.append("task_created", {"task": {"task_id": "o1", "project": "demo", "task_type": "oversee"}})
+    s.append("task_result", {"task_id": "v1", "ok": True, "summary": "judge verdict: pass (0.8)"})
+    s.append("task_result", {"task_id": "o1", "ok": True, "summary": "fixed the failing import"})
+    s.append("project_confirmed", {"project": "demo"})
+    feed = activity(s)
+    texts = [a["text"] for a in feed]
+    assert texts[0].startswith("you confirmed — demo")          # newest first
+    assert any("overseer — fixed the failing import" in t for t in texts)
+    assert any("judge — judge verdict: pass" in t for t in texts)
+    assert all("ts" in a for a in feed)                          # timestamped
+
+
+def test_activity_omits_transient_failures(tmp_path: Path):
+    s = EventStore(tmp_path / "e.log")
+    s.append("task_created", {"task": {"task_id": "b1", "project": "p", "task_type": "implement"}})
+    s.append("task_result", {"task_id": "b1", "ok": False, "summary": "killed",
+                             "cause": "Traceback ... KeyboardInterrupt"})
+    assert activity(s) == []                                     # restart-kill noise excluded
+
+
+def test_project_overview_shows_in_flight_projects(tmp_path: Path):
+    """In-flight projects must appear with live counts — not 'No projects yet' until they drain."""
+    from edge.server import project_overview
+    s = EventStore(tmp_path / "e.log")
+    s.append("task_created", {"task": {"task_id": "a", "project": "edge", "task_type": "implement"}})
+    s.append("task_transition", {"task_id": "a", "to": "in_progress"})
+    s.append("task_created", {"task": {"task_id": "b", "project": "edge", "task_type": "test"}})
+    s.append("task_created", {"task": {"task_id": "m", "project": "__overseer__", "task_type": "oversee"}})
+    ov = project_overview(s)
+    assert "edge" in ov and "__overseer__" not in ov          # real project shown, meta hidden
+    assert ov["edge"]["running"] == 1 and ov["edge"]["queued"] == 1
+
+
+def test_health_reports_liveness_and_counts(tmp_path: Path):
+    log = tmp_path / "e.log"
+    s = EventStore(log)
+    s.append("task_created", {"task": {"task_id": "a", "project": "p",
+                                       "task_type": "implement", "status": "queued"}})
+    s.append("task_transition", {"task_id": "a", "to": "in_progress"})
+    h = health(log)
+    assert h["running"] == 1 and h["queued"] == 0
+    assert h["alive"] is True and h["last_activity_s"] is not None
+    assert h["status"] == "working"          # a task in progress is WORKING, never 'stopped'
+
+
+def test_health_distinguishes_stalled_from_idle(tmp_path: Path):
+    # work queued but nothing running and quiet for >2min -> 'stalled?' (the daemon likely died)
+    stalled = tmp_path / "stalled.log"
+    s = EventStore(stalled)
+    s.append("task_created", {"task": {"task_id": "q", "project": "p",
+                                       "task_type": "implement", "status": "queued"}})
+    old = time.time() - 300
+    os.utime(stalled, (old, old))
+    assert health(stalled)["status"] == "stalled?"
+
+    # nothing queued, nothing running, quiet -> just 'idle' (nothing to do, not broken)
+    idle = tmp_path / "idle.log"
+    s2 = EventStore(idle)
+    s2.append("task_created", {"task": {"task_id": "d", "project": "p",
+                                        "task_type": "implement", "status": "queued"}})
+    s2.append("task_transition", {"task_id": "d", "to": "done"})
+    os.utime(idle, (old, old))
+    assert health(idle)["status"] == "idle"
 
 
 def test_escalations_keeps_latest_per_task(tmp_path: Path):

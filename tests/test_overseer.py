@@ -45,3 +45,132 @@ def test_overseer_llm_failure_is_safe(tmp_path: Path):
 def test_parse_directive_tolerates_fences_and_prose():
     assert parse_directive('done\n```json\n{"action": "a", "revalidate": true}\n```')["revalidate"] is True
     assert parse_directive("no json at all") == {}
+
+
+# --- persistent-session modes (observe / succession) ---
+
+def _capturing_stub(text: str):
+    seen = {}
+
+    def call(_provider, _model, prompt, *, system=None, cwd=None, session_id=None, resume=False, **_kw):
+        seen.update(prompt=prompt, system=system, cwd=cwd, session_id=session_id, resume=resume)
+        return LLMResult(text=text, cost_usd=0.05, model="opus", session_id=session_id or "")
+    return call, seen
+
+
+def _meta_payload(mode: str, *, context: str = "", session_id: str = "S1") -> dict:
+    return {"task": {"task_id": "o1", "title": "meta", "task_type": "oversee", "project": "default",
+                     "payload": {"mode": mode, "context": context, "session_id": session_id, "resume": True}}}
+
+
+def test_observe_runs_in_resumed_session_at_root():
+    call, seen = _capturing_stub("Projects A and B progressing; C stalled.")
+    res = run(_meta_payload("observe", context="A: done; C: failed"), call=call)
+    assert res.ok and "overseer observed" in res.summary
+    assert seen["session_id"] == "S1" and seen["resume"] is True   # resumed the persistent session
+    assert seen["cwd"] is None                                     # stable cwd (repo root), not a project dir
+
+
+def test_succession_writes_handoff_and_improves_extra(tmp_path: Path):
+    out = '{"handoff": "STATE: deal-sniper passing. WIP: none. DO NOT REDO: parser.", "improved_extra": "Always cite task ids."}'
+    call, _ = _capturing_stub(out)
+    res = run(_meta_payload("succession", context="deal-sniper: passing"), call=call, state_root=str(tmp_path))
+    assert res.ok and "succession handoff" in res.summary
+    assert "DO NOT REDO" in (tmp_path / "handoff_latest.md").read_text(encoding="utf-8")
+    assert (tmp_path / "handoff_extra.md").read_text(encoding="utf-8") == "Always cite task ids."
+
+
+def test_succession_keeps_floor_when_no_extra_proposed(tmp_path: Path):
+    (tmp_path / "handoff_extra.md").write_text("prior extra", encoding="utf-8")
+    out = '{"handoff": "a complete note", "improved_extra": ""}'
+    call, _ = _capturing_stub(out)
+    res = run(_meta_payload("succession"), call=call, state_root=str(tmp_path))
+    assert res.ok
+    assert (tmp_path / "handoff_extra.md").read_text(encoding="utf-8") == "prior extra"   # unchanged
+
+
+def test_succession_fails_loudly_without_handoff(tmp_path: Path):
+    call, _ = _capturing_stub('{"improved_extra": "x"}')   # no handoff key
+    res = run(_meta_payload("succession"), call=call, state_root=str(tmp_path))
+    assert not res.ok and "no handoff" in res.summary
+
+
+# --- cross-project authority: the overseer directs new work via enqueue directives ---
+
+def test_observe_enqueues_directed_work():
+    out = ('C is stalled; A and B are healthy. We should start a backup tool.\n'
+           '{"enqueue": [{"project": "backup-tool", "goal": "Build a stdlib backup CLI"}]}')
+    call, _ = _capturing_stub(out)
+    res = run(_meta_payload("observe"), call=call)
+    assert res.ok and len(res.spawned_tasks) == 1
+    t = res.spawned_tasks[0]
+    assert t["task_type"] == "plan" and t["project"] == "backup-tool" and "backup" in t["title"]
+
+
+def test_observe_guardrail_blocks_reserved_and_empty_targets():
+    out = '{"enqueue": [{"project": "__overseer__", "goal": "tamper"}, {"project": "ok", "goal": ""}, {"project": "real", "goal": "do it"}]}'
+    call, _ = _capturing_stub(out)
+    res = run(_meta_payload("observe"), call=call)
+    projects = [t["project"] for t in res.spawned_tasks]
+    assert projects == ["real"]               # reserved (__) and goal-less directives are dropped
+
+
+def test_observe_enqueue_is_bounded():
+    items = ",".join(f'{{"project": "p{i}", "goal": "g{i}"}}' for i in range(20))
+    call, _ = _capturing_stub('{"enqueue": [' + items + ']}')
+    res = run(_meta_payload("observe"), call=call)
+    assert len(res.spawned_tasks) == 5        # MAX_OVERSEER_ENQUEUES caps runaway direction
+
+
+def test_observe_without_directives_spawns_nothing():
+    call, _ = _capturing_stub("Everything looks healthy; nothing to start.")
+    res = run(_meta_payload("observe"), call=call)
+    assert res.ok and res.spawned_tasks == []
+
+
+# --- the immutable charter: the overseer knows it is responsible for the orchestrator ---
+
+def test_charter_is_carried_into_observe_and_succession(tmp_path: Path):
+    from memory.overseer import OVERSEER_CHARTER
+
+    call_o, seen_o = _capturing_stub("ok")
+    run(_meta_payload("observe"), call=call_o)
+    assert OVERSEER_CHARTER in seen_o["system"]
+    assert "accountable for the orchestrator" in seen_o["system"].lower()
+
+    call_s, seen_s = _capturing_stub('{"handoff": "note", "improved_extra": ""}')
+    run(_meta_payload("succession"), call=call_s, state_root=str(tmp_path))
+    assert OVERSEER_CHARTER in seen_s["system"]
+
+
+def test_charter_is_carried_into_intervene(tmp_path: Path):
+    from memory.overseer import OVERSEER_CHARTER
+    seen = {}
+
+    def call(_p, _m, _prompt, *, system=None, cwd=None, **_kw):
+        seen["system"] = system
+        return LLMResult(text='{"action": "x", "revalidate": false}', cost_usd=0.0, model="opus")
+
+    run(_payload("fix it"), call=call, projects_root=str(tmp_path))
+    assert OVERSEER_CHARTER in seen["system"] and "NEVER modify the orchestrator" in seen["system"]
+
+
+def test_observe_abandon_directive_spawns_control_task():
+    out = '{"abandon": [{"project": "doomed", "reason": "unbuildable"}, {"project": "__overseer__", "reason": "x"}]}'
+    call, _ = _capturing_stub(out)
+    res = run(_meta_payload("observe"), call=call)
+    controls = [t for t in res.spawned_tasks if t["task_type"] == "control"]
+    assert len(controls) == 1                                  # reserved target dropped
+    p = controls[0]["payload"]
+    assert p["directive"] == "abandon" and p["project"] == "doomed" and p["reason"] == "unbuildable"
+    assert controls[0]["project"] == "__overseer__"            # the control task itself is a meta-task
+
+
+def test_observe_reprioritise_directive_spawns_control_task():
+    out = '{"reprioritise": [{"project": "urgent", "priority": 10}]}'
+    call, _ = _capturing_stub(out)
+    res = run(_meta_payload("observe"), call=call)
+    controls = [t for t in res.spawned_tasks if t["task_type"] == "control"]
+    assert len(controls) == 1
+    p = controls[0]["payload"]
+    assert p["directive"] == "reprioritise" and p["project"] == "urgent" and p["priority"] == 10

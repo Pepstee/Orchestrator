@@ -17,7 +17,7 @@ from typing import Callable
 from agents.common import safe_main
 from core.models import AgentResult, Task
 from infra.llm import LLMResult, call_llm
-from infra.workspace import check_pristine, default_projects_root, resolve_project_dir
+from infra.workspace import check_pristine, task_workdir
 from registry.agents import model_for
 
 SYSTEM_PROMPT = (
@@ -51,8 +51,7 @@ def _list_artifacts(project_dir: Path) -> list[str]:
 def run(payload: dict, call: LLMCall = call_llm, projects_root: str | None = None) -> AgentResult:
     task = Task.from_dict(payload.get("task", {}))
     spec = model_for("builder")
-    root = Path(projects_root) if projects_root else default_projects_root()
-    project_dir = resolve_project_dir(root, task.project)
+    project_dir = task_workdir(task, projects_root)   # its worktree if isolated, else the project tree
     try:
         res = call(
             spec["provider"], spec["model"], build_prompt(task),

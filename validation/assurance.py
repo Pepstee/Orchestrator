@@ -116,21 +116,24 @@ def llm_tier(
 
 
 def hardening_tiers(governor: Any = None, call: Callable[..., Any] = call_llm) -> list[Tier]:
-    """The escalating ladder: re-run tests -> mutation gap -> adversarial probe. The LLM tiers run on
-    the Judge's provider (independent of the builder)."""
+    """The escalating ship-readiness ladder, cheapest first: re-run the suite -> REAL mutation testing
+    (deterministic: prove the tests can fail) -> an adversarial LLM probe on the Judge's provider
+    (independent of the builder). A finding at any tier blocks completion (the project is not 'done').
+    The adversarial probe is framed strictly: report an issue only when it is concretely demonstrable,
+    so a correct project converges rather than being failed on imagined faults."""
+    from validation.acceptance_exec import run_acceptance_gate
+    from validation.mutation import run_mutation_gate   # local import: avoids a load-order cycle
     jm = model_for("judge")
     return [
         lambda project_dir: run_test_gate(project_dir),
-        llm_tier(
-            "mutation",
-            "Identify a plausible small code change (mutation) that the existing tests would NOT "
-            "catch — a real gap in test coverage.",
-            provider=jm["provider"], model=jm["model"], governor=governor, call=call,
-        ),
+        lambda project_dir: run_acceptance_gate(project_dir),   # the product actually runs + produces output
+        lambda project_dir: run_mutation_gate(project_dir),
         llm_tier(
             "adversarial",
-            "Identify an input or scenario (edge case, malformed or hostile input, or security flaw) "
-            "that the code mishandles.",
+            "Find a CONCRETE, demonstrable defect: a specific input or scenario (edge case, malformed "
+            "or hostile input, or security flaw) the code actually mishandles. Only report an issue you "
+            "can concretely justify with the offending input and the wrong behaviour; if the code is "
+            "correct, report issue_found=false.",
             provider=jm["provider"], model=jm["model"], governor=governor, call=call,
         ),
     ]

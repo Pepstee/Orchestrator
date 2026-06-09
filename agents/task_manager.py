@@ -24,15 +24,34 @@ from registry.agents import model_for
 SYSTEM_PROMPT = (
     "You are the task manager in an autonomous orchestrator. You plan INCREMENTALLY: given the goal "
     "and the current project state, output ONLY the NEXT small batch of concrete, "
-    "independently-checkable steps — never the whole project at once. Fix failures first. Every "
-    "implement step writes its OWN tests; validate steps are review-only — NEVER create a separate "
-    "test-writing step typed 'validate'. Output ONLY a JSON array, or [] when the goal is fully met."
+    "independently-checkable steps — never the whole project at once. Fix failures first. "
+    "Separate the work by responsibility: an 'implement' step writes ONLY the implementation code "
+    "(it does NOT write its own tests); pair each 'implement' step with a 'test' step that depends "
+    "on it — the test-author is a SEPARATE agent so tests are an independent check, not "
+    "self-agreement. 'validate' steps are review-only. Output ONLY a JSON array, or [] when the goal "
+    "is fully met."
 )
 
 LLMCall = Callable[..., LLMResult]
 
 
-def build_prompt(goal: str, acceptance: list[str] | None = None, state: dict | None = None) -> str:
+_IMPROVE_INSTRUCTION = (
+    "This project ALREADY MEETS its scope and is certified working. Your job now is to make it "
+    "genuinely BETTER — plan the next 1-5 improvement steps, thinking like a discerning senior "
+    "engineer AND product owner. Pick the highest-leverage improvements from: security hardening; "
+    "reliability & error handling; broader, stronger, mutation-resistant tests; performance and lower "
+    "token/resource use; cleaner code & architecture; better UX and presentation; a GUI or nicer "
+    "interface; documentation; and genuinely useful new or better features. Use common sense about "
+    "what a human would be proud to ship. Each 'implement' step writes ONLY code; pair it with a "
+    "'test' step; 'validate' is review-only. Output [] ONLY if the project is already exceptional and "
+    "you honestly cannot make it meaningfully better.\n"
+    '  {"title": str, "task_type": "implement"|"test"|"validate", "acceptance": [str], "depends_on": [int]}\n'
+    "depends_on lists indices within THIS array."
+)
+
+
+def build_prompt(goal: str, acceptance: list[str] | None = None, state: dict | None = None,
+                 mode: str = "build") -> str:
     state = state or {}
     parts = [f"Goal: {goal}"]
     if acceptance:
@@ -47,12 +66,22 @@ def build_prompt(goal: str, acceptance: list[str] | None = None, state: dict | N
     if failed:
         parts.append("Steps that FAILED — fix these FIRST:\n"
                      + "\n".join((f"- {f.get('title', '')}: {f.get('cause', '')}")[:200] for f in failed[:20]))
+    if mode == "improve":
+        parts.append(_IMPROVE_INSTRUCTION)
+        return "\n\n".join(parts)
     parts.append(
         "Output ONLY a JSON array of the NEXT 1-5 steps (fix failures first, then the next "
-        "increment toward the goal). Every implement step MUST write its own tests; validate steps "
-        "are review-only. Output [] if the goal is fully met and nothing remains. Each step:\n"
-        '  {"title": str, "task_type": "implement"|"validate", "acceptance": [str], "depends_on": [int]}\n'
-        "depends_on lists indices within THIS array."
+        "increment toward the goal). Split work by responsibility: an 'implement' step writes ONLY "
+        "code (no tests); pair it with a 'test' step that depends on it (a separate agent authors the "
+        "tests, independently); 'validate' steps are review-only. CONCURRENCY: steps run in parallel, "
+        "so any shared foundation (package scaffold, config, shared types/interfaces) MUST be a single "
+        "EARLY step that later steps depend_on; parallel 'implement' steps must touch DIFFERENT files "
+        "so they never edit the same lines at once. For a RUNNABLE product, ensure an "
+        "`acceptance` file exists at the project root with a command that runs it on sample input and "
+        "prints real output (used to verify it actually works). Output [] if the goal is fully met "
+        "and nothing remains. Each step:\n"
+        '  {"title": str, "task_type": "implement"|"test"|"validate", "acceptance": [str], "depends_on": [int]}\n'
+        "depends_on lists indices within THIS array (e.g. the test step depends on its implement step)."
     )
     return "\n\n".join(parts)
 
@@ -77,11 +106,13 @@ def parse_plan(text: str) -> list[dict]:
 
 def run(payload: dict, call: LLMCall = call_llm) -> AgentResult:
     task = Task.from_dict(payload.get("task", {}))
-    state = task.payload.get("state") if isinstance(task.payload, dict) else None
+    pl = task.payload if isinstance(task.payload, dict) else {}
+    state = pl.get("state")
+    mode = pl.get("mode", "build")   # "improve" -> plan the next round of making a done project better
     spec = model_for("task_manager")
     try:
         res = call(spec["provider"], spec["model"],
-                   build_prompt(task.title, task.acceptance_criteria, state), system=SYSTEM_PROMPT)
+                   build_prompt(task.title, task.acceptance_criteria, state, mode=mode), system=SYSTEM_PROMPT)
     except Exception as exc:
         return AgentResult(ok=False, summary="task manager call failed", cause=f"{type(exc).__name__}: {exc}")
 

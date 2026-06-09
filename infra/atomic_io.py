@@ -32,6 +32,26 @@ def write_json_atomic(path: Path | str, obj: Any) -> None:
                 pass
 
 
+def write_text_atomic(path: Path | str, text: str) -> None:
+    """Write raw text crash-safely (temp + fsync + atomic rename) — the text counterpart to
+    write_json_atomic, used e.g. by the mutation-testing sandbox."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
+
 def append_jsonl(path: Path | str, record: dict[str, Any]) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip install *)",
+      "Bash(graphify install *)",
+      "Bash(python3 -m pip install graphifyy)",
+      "Bash(command -v graphify)",
+      "Bash(command -v pipx)",
+      "Bash(graphify --version)",
+      "Bash(graphify export *)",
+      "Bash(graphify benchmark *)",
+      "Bash(graphify hook *)"
+    ]
+  }
+}

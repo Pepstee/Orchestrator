@@ -70,6 +70,7 @@ class Task:
     max_retries: int = 3
     parent_task_id: str | None = None
     project: str = "default"          # which project tree under projects/ this builds into
+    priority: int = 0                 # higher runs first among ready tasks (set by the overseer)
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)

@@ -11,7 +11,11 @@ from __future__ import annotations
 import hashlib
 from collections import Counter
 
+from infra.llm import is_transient_cause
 from pa.rules import SAFE_ACTIONS, Rule, consult
+
+# Transient infra conditions (restart-kills, rate-limit windows) are NOT defects and must never become
+# escalate rules — that mis-learning is what floods the tray. Classified once in infra.llm.
 
 
 def _rule_id(pattern: str) -> str:
@@ -27,7 +31,7 @@ def evolve(
 ) -> list[Rule]:
     """Mine recurring causes into candidate rules, bump evidence, and promote safe candidates at
     threshold. Mutates and returns `rules` (the caller persists). One-off failures are ignored."""
-    counts = Counter(c.strip() for c in causes if c and c.strip())
+    counts = Counter(c.strip() for c in causes if c and c.strip() and not is_transient_cause(c))
     by_pattern = {r.pattern: r for r in rules}
     for cause, n in counts.items():
         if n < min_occurrences:

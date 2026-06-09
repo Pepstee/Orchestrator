@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import uuid
 from dataclasses import dataclass
 
 
@@ -17,6 +18,7 @@ class LLMResult:
     text: str
     cost_usd: float
     model: str
+    session_id: str = ""   # the Claude session this turn ran in (for resumable, persistent agents)
 
 
 class RateLimited(RuntimeError):
@@ -24,15 +26,82 @@ class RateLimited(RuntimeError):
     caller should back off and retry, NOT treat it as a task failure."""
 
 
-_RATE_LIMIT_HINTS = (
-    "rate limit", "rate_limit", "usage limit", "429", "quota",
-    "too many requests", "overloaded", "529", "resets at", "try again later",
+# The SINGLE source of rate/usage-limit hints, matched (case-insensitive) against provider output and
+# failure causes. Covers the real Claude Max wordings — the bare "5-hour limit reached ∙ resets 5am"
+# carries none of the generic phrases, so it MUST be listed explicitly or a limit reads as a hard
+# failure (retried + escalated) instead of self-resolving. Kept specific to avoid false positives.
+RATE_LIMIT_HINTS = (
+    "rate limit", "rate_limit", "ratelimited", "rate_limit_error",
+    "usage limit", "5-hour limit", "5 hour limit", "weekly limit",
+    "try again later", "try again after",
+    "429", "529", "quota", "too many requests", "overloaded", "overloaded_error",
 )
 
 
 def _looks_rate_limited(text: str) -> bool:
     low = (text or "").lower()
-    return any(hint in low for hint in _RATE_LIMIT_HINTS)
+    return any(hint in low for hint in RATE_LIMIT_HINTS)
+
+
+# Deterministic CLI / argument errors: retrying these byte-for-byte will fail identically forever, so
+# they are HARD failures the operator should see (escalated), never silently looped. Everything else
+# — including a bare non-zero exit with NO diagnostic output, which is exactly how the Claude CLI
+# surfaces a usage cap — is treated as transient (see the default branch of _fail_provider).
+_HARD_CLI_ERROR_HINTS = (
+    "unknown option", "unknown argument", "unknown command", "unrecognized",
+    "invalid model", "usage: claude", "no such file", "command not found",
+    "permission denied", "missing required",
+)
+
+# A resume aimed at a session that is missing / expired / not a valid id. NOT a hard failure: the work
+# shouldn't die with the session — _run_claude falls back to a fresh session and carries on.
+_SESSION_ERROR_HINTS = (
+    "--resume requires", "does not match any session", "no conversation found",
+    "is not a uuid", "session not found", "no session",
+)
+
+
+def _is_hard_cli_error(text: str) -> bool:
+    low = (text or "").lower()
+    return any(hint in low for hint in _HARD_CLI_ERROR_HINTS)
+
+
+def _looks_session_error(text: str) -> bool:
+    low = (text or "").lower()
+    return any(hint in low for hint in _SESSION_ERROR_HINTS)
+
+
+def _fail_provider(provider: str, rc: int, raw: str) -> None:
+    """Classify a non-zero provider exit and raise. Rate-limit wording -> RateLimited (transient). A
+    recognised deterministic CLI/arg error -> RuntimeError (hard, surfaced). Anything else, INCLUDING
+    an opaque exit with no diagnostic output -> RateLimited: a bare `claude exited 1` with no message
+    is the signature of a hit usage cap, so it must back off and resume after the reset, never escalate
+    into a permanent failure (the bug that stranded a whole night's work). 'usage limit' is in the
+    message so the dispatcher's is_transient_cause classifies it transient via the single hint list."""
+    if _looks_rate_limited(raw):
+        raise RateLimited(f"{provider} usage/rate limit: {raw[-300:]}")
+    if _is_hard_cli_error(raw):
+        raise RuntimeError(f"{provider} exited {rc}: {raw[-300:]}")
+    raise RateLimited(
+        f"{provider} exited {rc} with no recognisable error — treating as transient usage limit "
+        f"(back off and retry, do not escalate): {raw[-200:]!r}"
+    )
+
+
+def is_transient_cause(cause: str) -> bool:
+    """The SINGLE definition of a transient (not-the-task's-fault) failure cause: a provider rate/usage
+    limit, OR the daemon being killed mid-task (KeyboardInterrupt on restart/Ctrl-C). These are the ONLY
+    causes that requeue WITHOUT a retry penalty (unbounded) — because they self-resolve with time.
+
+    A merge conflict is deliberately NOT here: it goes through the BOUNDED retry ladder instead (a fresh
+    re-run off current main clears a stale-branch conflict; a genuine overlapping-diff conflict does NOT
+    self-resolve, so it must be capped and surfaced, never looped — an unbounded conflict requeue burns
+    a full agent run each iteration and will drain the token budget, which is exactly what it once did).
+
+    Used by the dispatcher (requeue, don't fail), the PA (never learn an escalate rule), and the GUI
+    (never show it as 'needs you'). One source so the three can't drift."""
+    low = (cause or "").lower()
+    return "keyboardinterrupt" in low or any(hint in low for hint in RATE_LIMIT_HINTS)
 
 
 def _parse_claude_output(stdout: str) -> LLMResult:
@@ -44,7 +113,7 @@ def _parse_claude_output(stdout: str) -> LLMResult:
     usage = data.get("modelUsage")
     if isinstance(usage, dict) and usage:
         model = next(iter(usage.keys()), "")
-    return LLMResult(text=text, cost_usd=cost, model=model)
+    return LLMResult(text=text, cost_usd=cost, model=model, session_id=str(data.get("session_id", "") or ""))
 
 
 def _parse_codex_output(stdout: str) -> LLMResult:
@@ -78,22 +147,51 @@ def call_llm(
     system: str | None = None,
     cwd: str | None = None,
     timeout: int = 600,
+    session_id: str | None = None,
+    resume: bool = False,
 ) -> LLMResult:
+    """Invoke a provider. For a persistent, resumable agent (e.g. the Overseer meta-agent), pass a
+    caller-owned ``session_id``: ``resume=False`` CREATES that session, ``resume=True`` CONTINUES it
+    with the full prior context. Only the Claude path supports sessions; other providers ignore the
+    args and run stateless (the abstraction degrades gracefully)."""
     if provider == "claude":
         full = f"{system}\n\n{prompt}" if system else prompt
-        cmd = ["claude", "-p", "--output-format", "json", "--model", model]
+        base = ["claude", "-p", "--output-format", "json", "--model", model]
         if cwd:
-            # file-writing mode: run in the project dir and allow the editing tools headlessly
-            cmd.append("--dangerously-skip-permissions")
-        proc = subprocess.run(
-            cmd, input=full, capture_output=True, text=True, timeout=timeout, cwd=cwd
-        )
+            # file-writing mode: run in the project dir and allow the editing tools headlessly.
+            # NB: this flag is NOT sticky across --resume, so it must be re-passed every call.
+            base.append("--dangerously-skip-permissions")
+
+        def _run(session_args: list[str]) -> subprocess.CompletedProcess:
+            return subprocess.run(base + session_args, input=full, capture_output=True,
+                                  text=True, timeout=timeout, cwd=cwd)
+
+        # We OWN the UUID (reliable), rather than scraping it back. --resume continues the conversation
+        # with full context; --session-id starts a new one under that id.
+        session_args = []
+        if session_id:
+            session_args = ["--resume", session_id] if resume else ["--session-id", session_id]
+        proc = _run(session_args)
+
         if proc.returncode != 0:
             raw = proc.stderr or proc.stdout or ""
-            if _looks_rate_limited(raw):
-                raise RateLimited(f"claude usage/rate limit: {raw[-300:]}")
-            raise RuntimeError(f"claude exited {proc.returncode}: {raw[-300:]}")
-        return _parse_claude_output(proc.stdout)
+            # Resume-fallback: a resume against a missing / expired / invalid session must NOT kill the
+            # agent. Start a FRESH session under a new valid UUID once and carry on — continuity restarts
+            # here rather than the whole task failing (the persistent overseer self-heals instead of
+            # looping the same broken --resume forever). The new id is returned so the caller persists it.
+            if resume and session_id and _looks_session_error(raw) and not _looks_rate_limited(raw):
+                fresh_id = str(uuid.uuid4())
+                proc = _run(["--session-id", fresh_id])
+                if proc.returncode == 0:
+                    result = _parse_claude_output(proc.stdout)
+                    result.session_id = result.session_id or fresh_id
+                    return result
+                raw = proc.stderr or proc.stdout or ""   # fall through to classify the fresh attempt
+            _fail_provider("claude", proc.returncode, raw)
+        result = _parse_claude_output(proc.stdout)
+        if session_id and not result.session_id:
+            result.session_id = session_id   # fall back to the id we supplied (output echo is flaky)
+        return result
     if provider == "openai":
         full = f"{system}\n\n{prompt}" if system else prompt
         proc = subprocess.run(
@@ -102,8 +200,6 @@ def call_llm(
         )
         if proc.returncode != 0:
             raw = proc.stderr or proc.stdout or ""
-            if _looks_rate_limited(raw):
-                raise RateLimited(f"codex usage/rate limit: {raw[-300:]}")
-            raise RuntimeError(f"codex exited {proc.returncode}: {raw[-300:]}")
+            _fail_provider("codex", proc.returncode, raw)
         return _parse_codex_output(proc.stdout)
     raise ValueError(f"unknown provider {provider!r}")

@@ -20,6 +20,7 @@ from core.models import Task, TaskStatus
 from dispatch.dispatcher import Invoke
 from dispatch.repository import TaskRepository
 from infra.workspace import default_projects_root, resolve_project_dir
+from validation.authenticity import scan_authenticity
 from validation.gates import DEFAULT_TEST_COMMAND, CompletionResult, evaluate_completion, run_test_gate
 
 __all__ = ["DEFAULT_TEST_COMMAND", "ProjectOutcome", "evaluate_project", "run_project"]
@@ -32,7 +33,7 @@ class ProjectOutcome:
     tasks_total: int
     gates: dict[str, bool]
     completion: CompletionResult
-    pending_user: bool
+    complete: bool          # all automated gates pass — ready to self-certify (no human gate)
 
 
 def _live_tasks(tasks: list[Task]) -> list[Task]:
@@ -68,8 +69,9 @@ def evaluate_project(
     root = Path(projects_root) if projects_root else default_projects_root()
     project_dir = resolve_project_dir(root, project)
     tests_ok = run_test_gate(str(project_dir), command=test_command).passed
+    authentic = scan_authenticity(str(project_dir)).passed   # no stubs/placeholders/mocks (charter bar 1)
 
-    gates = {"tests": tests_ok, "acceptance": acceptance, "judge": judge_ok, "user": False}
+    gates = {"tests": tests_ok, "acceptance": acceptance, "judge": judge_ok, "authenticity": authentic}
     completion = evaluate_completion(gates)
     return ProjectOutcome(
         project=project,
@@ -77,7 +79,7 @@ def evaluate_project(
         tasks_total=len(proj_tasks),
         gates=gates,
         completion=completion,
-        pending_user=(completion.unmet == ["user"]),
+        complete=completion.done,     # automated gates all pass -> the orchestrator certifies it
     )
 
 

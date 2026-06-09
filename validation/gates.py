@@ -11,7 +11,10 @@ import subprocess
 import sys
 from dataclasses import dataclass, field
 
-REQUIRED_GATES = ("tests", "acceptance", "judge", "user")
+# Completion is decided ENTIRELY by automated gates — there is no human-confirmation gate. The
+# orchestrator self-certifies 'done' when all of these pass AND the assurance ladder comes back clean
+# (mutation, acceptance-by-execution, adversarial). Nothing waits on the operator (their explicit call).
+REQUIRED_GATES = ("tests", "acceptance", "judge", "authenticity")
 
 # Use the daemon's own interpreter, never a bare "python" — on macOS only "python3" may exist
 # (the same exit-127 trap that bit agent launch). Single source of truth for the test command.
@@ -33,7 +36,7 @@ class CompletionResult:
 
 def run_test_gate(
     project_dir: str,
-    command: tuple[str, ...] = ("python", "-m", "pytest", "-q"),
+    command: tuple[str, ...] = DEFAULT_TEST_COMMAND,
     timeout: int = 1800,
 ) -> GateResult:
     """Run the project's own test suite in its directory. Passed = exit code 0."""

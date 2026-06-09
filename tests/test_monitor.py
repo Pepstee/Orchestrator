@@ -12,6 +12,7 @@ from infra.workspace import resolve_project_dir
 from validation.gates import GateResult
 
 PASS = ("python", "-c", "raise SystemExit(0)")
+OK_TIERS = [lambda _d: GateResult("ok", True)]   # trivial passing assurance for non-assurance tests
 
 
 def _finished_project(repo: TaskRepository) -> None:
@@ -22,13 +23,13 @@ def _finished_project(repo: TaskRepository) -> None:
         repo.apply(tid, Event.COMPLETE)
 
 
-def test_evaluate_project_pending_user(tmp_path: Path):
+def test_evaluate_project_complete(tmp_path: Path):
     repo = TaskRepository(EventStore(tmp_path / "e.log"))
     _finished_project(repo)
     resolve_project_dir(tmp_path, "demo")   # ensure the project dir exists for the test gate
     out = evaluate_project(repo, project="demo", projects_root=str(tmp_path), test_command=PASS)
-    assert out.gates == {"tests": True, "acceptance": True, "judge": True, "user": False}
-    assert out.pending_user
+    assert out.gates == {"tests": True, "acceptance": True, "judge": True, "authenticity": True}
+    assert out.complete   # all automated gates pass -> self-certified, no human gate
 
 
 def test_monitor_finalises_hardens_and_records(tmp_path: Path):
@@ -40,17 +41,45 @@ def test_monitor_finalises_hardens_and_records(tmp_path: Path):
     evaluated: dict = {}
     outs = monitor_projects(repo, evaluated, projects_root=str(tmp_path),
                             test_command=PASS, tiers=tiers)
-    assert len(outs) == 1 and outs[0].pending_user
+    assert len(outs) == 1 and outs[0].complete
     assert "demo" in evaluated
     assert hardened, "assurance loop should run on a finalised project"
-    # durable pending_user status was recorded
-    statuses = [e.data for e in EventStore(str(tmp_path / "e.log")).replay()
-                if e.kind == "project_status"]
-    assert statuses and statuses[-1]["project"] == "demo" and statuses[-1]["pending_user"]
-    # the assurance outcome is now persisted too
+    # clean assurance -> the orchestrator SELF-CERTIFIES (no human gate): a confirmation is recorded
+    confirmed = [e.data for e in EventStore(str(tmp_path / "e.log")).replay()
+                 if e.kind == "project_confirmed"]
+    assert confirmed and confirmed[-1]["project"] == "demo"
     assurance = [e.data for e in EventStore(str(tmp_path / "e.log")).replay()
                  if e.kind == "assurance_result"]
     assert assurance and assurance[-1]["project"] == "demo" and assurance[-1]["fully_hardened"]
+
+
+def test_failed_assurance_blocks_the_ping_and_calls_overseer(tmp_path: Path):
+    """The deterministic gates pass, but a failing assurance tier (e.g. mutation) means NOT ship-ready:
+    the project goes to the overseer, it does NOT land in your confirmation tray (charter bar 6)."""
+    repo = TaskRepository(EventStore(tmp_path / "e.log"))
+    _finished_project(repo)
+    resolve_project_dir(tmp_path, "demo")
+    fail_tiers = [lambda _d: GateResult("mutation", False, "score 1/5")]
+    outs = monitor_projects(repo, {}, projects_root=str(tmp_path), test_command=PASS, tiers=fail_tiers)
+    assert outs and outs[0].complete                      # automated gates passed...
+    oversee = [t for t in repo.list() if t.project == "demo" and t.task_type == "oversee"]
+    assert oversee                                        # ...but quality failed -> overseer, not done
+    assurance = [e.data for e in EventStore(str(tmp_path / "e.log")).replay()
+                 if e.kind == "assurance_result"]
+    assert assurance and not assurance[-1]["fully_hardened"]
+
+
+def test_self_certify_opens_a_forever_improve_round(tmp_path: Path):
+    """Certifying a project at scope must NOT stop it — it opens an 'improve' round so the orchestrator
+    keeps making it better (security, tests, UX, perf, features...) instead of going idle."""
+    repo = TaskRepository(EventStore(tmp_path / "e.log"))
+    _finished_project(repo)
+    resolve_project_dir(tmp_path, "demo")
+    monitor_projects(repo, {}, projects_root=str(tmp_path), test_command=PASS, tiers=OK_TIERS)
+    confirmed = [e for e in EventStore(str(tmp_path / "e.log")).replay() if e.kind == "project_confirmed"]
+    improve = [t for t in repo.list() if t.task_type == "plan"
+               and isinstance(t.payload, dict) and t.payload.get("mode") == "improve"]
+    assert confirmed and improve   # certified at scope AND a fresh improvement round queued
 
 
 def test_monitor_skips_in_progress_project(tmp_path: Path):
@@ -65,8 +94,10 @@ def test_monitor_finalises_each_project_once(tmp_path: Path):
     _finished_project(repo)
     resolve_project_dir(tmp_path, "demo")
     evaluated: dict = {}
-    assert len(monitor_projects(repo, evaluated, projects_root=str(tmp_path), test_command=PASS)) == 1
-    assert monitor_projects(repo, evaluated, projects_root=str(tmp_path), test_command=PASS) == []
+    assert len(monitor_projects(repo, evaluated, projects_root=str(tmp_path),
+                                test_command=PASS, tiers=OK_TIERS)) == 1
+    assert monitor_projects(repo, evaluated, projects_root=str(tmp_path),
+                            test_command=PASS, tiers=OK_TIERS) == []
 
 
 def test_monitor_records_failed_gates_without_hardening(tmp_path: Path):
@@ -78,7 +109,7 @@ def test_monitor_records_failed_gates_without_hardening(tmp_path: Path):
     # failing tests -> not pending_user -> no assurance
     outs = monitor_projects(repo, {}, projects_root=str(tmp_path),
                             test_command=("python", "-c", "raise SystemExit(1)"), tiers=tiers)
-    assert outs and not outs[0].pending_user
+    assert outs and not outs[0].complete
     assert not hardened   # assurance does not run on a project that failed its gates
 
 
@@ -97,7 +128,7 @@ def test_superseded_failed_validate_does_not_poison_judge(tmp_path: Path):
     repo.apply("v_new", Event.COMPLETE)              # a fresh pass supersedes it
     resolve_project_dir(tmp_path, "demo")
     out = evaluate_project(repo, project="demo", projects_root=str(tmp_path), test_command=PASS)
-    assert out.gates["judge"] and out.pending_user
+    assert out.gates["judge"] and out.complete
 
 
 def test_status_summary_reads_projects(tmp_path: Path):
@@ -143,8 +174,9 @@ def test_monitor_overseer_steps_in_when_planner_stalls(tmp_path: Path):
     assert len(oversee) == 1 and not esc              # overseer dispatched, user NOT escalated
 
 
-def test_monitor_escalates_only_after_overseer_exhausted(tmp_path: Path):
-    """Escalate to the user only once the planner AND the overseer (cap) are both spent."""
+def test_monitor_abandons_after_overseer_exhausted(tmp_path: Path):
+    """Operator is NOT in the loop: once planner AND overseer are both spent, the orchestrator gives
+    up on the project (abandons, logged) — it never parks waiting on the user."""
     repo = TaskRepository(EventStore(tmp_path / "e.log"))
     repo.create(Task(task_id="p", title="Build X", task_type="plan", project="demo"))
     repo.apply("p", Event.CLAIM)
@@ -156,21 +188,32 @@ def test_monitor_escalates_only_after_overseer_exhausted(tmp_path: Path):
     resolve_project_dir(tmp_path, "demo")
     monitor_projects(repo, {}, projects_root=str(tmp_path), test_command=PASS,
                      tiers=[lambda _d: GateResult("t", True)])
-    esc = [e.data for e in EventStore(str(tmp_path / "e.log")).replay() if e.kind == "escalation"]
-    assert esc and esc[-1]["project"] == "demo"       # now escalated — both planner and overseer spent
+    events = list(EventStore(str(tmp_path / "e.log")).replay())
+    abandoned = [e.data for e in events if e.kind == "project_abandoned"]
+    assert abandoned and abandoned[-1]["project"] == "demo"        # gave up autonomously
+    assert not [e for e in events if e.kind == "escalation"]       # never escalated to a human
 
 
-def test_monitor_reevaluates_when_signature_changes(tmp_path: Path):
-    """An overseer fix adds a fresh task; once it completes, the project must re-finalise (not stay
-    stuck on the first evaluation) — this is what returns an overseer-fixed project to the tray."""
+def test_improve_loop_continues_then_stops_when_maxed(tmp_path: Path):
+    """Forever-improve: certifying opens an improve round; while that round is pending the project is
+    NOT re-evaluated; once it drains having produced nothing more, the project re-evaluates and the
+    loop STOPS (no tight empty cycling) — exactly the bounded-by-productivity behaviour."""
     repo = TaskRepository(EventStore(tmp_path / "e.log"))
     _finished_project(repo)
     resolve_project_dir(tmp_path, "demo")
     evaluated: dict = {}
-    assert len(monitor_projects(repo, evaluated, projects_root=str(tmp_path), test_command=PASS)) == 1
-    assert monitor_projects(repo, evaluated, projects_root=str(tmp_path), test_command=PASS) == []  # unchanged
-    repo.create(Task(task_id="o", title="overseer fix", task_type="oversee", project="demo"))
-    repo.apply("o", Event.CLAIM)
-    repo.apply("o", Event.COMPLETE)
-    outs = monitor_projects(repo, evaluated, projects_root=str(tmp_path), test_command=PASS)
-    assert len(outs) == 1   # signature changed -> re-evaluated
+    assert len(monitor_projects(repo, evaluated, projects_root=str(tmp_path),
+                                test_command=PASS, tiers=OK_TIERS)) == 1     # certify + open improve round
+    assert monitor_projects(repo, evaluated, projects_root=str(tmp_path),
+                            test_command=PASS, tiers=OK_TIERS) == []          # improve round pending -> skip
+    improve = [t for t in repo.list() if t.task_type == "plan"
+               and isinstance(t.payload, dict) and t.payload.get("mode") == "improve"]
+    assert len(improve) == 1
+    repo.apply(improve[0].task_id, Event.CLAIM)
+    repo.apply(improve[0].task_id, Event.COMPLETE)                           # round drains, spawned nothing
+    outs = monitor_projects(repo, evaluated, projects_root=str(tmp_path),
+                            test_command=PASS, tiers=OK_TIERS)
+    assert len(outs) == 1                                                     # re-evaluated after the round
+    again = [t for t in repo.list() if t.task_type == "plan"
+             and isinstance(t.payload, dict) and t.payload.get("mode") == "improve"]
+    assert len(again) == 1   # no new improve round — planner found nothing more, so the loop halts

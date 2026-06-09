@@ -21,7 +21,9 @@ FORBIDDEN = [
 
 def _py_files():
     for p in ROOT.rglob("*.py"):
-        if any(part in SKIP for part in p.parts):
+        # Skip the SKIP dirs, and any built-deliverable or archive tree (projects/, projects.archived-*,
+        # *.archived-*) — those are products, not orchestrator source the law applies to.
+        if any(part in SKIP or part.startswith("projects.") or ".archived-" in part for part in p.parts):
             continue
         if str(p.relative_to(ROOT)).replace("\\", "/") in ALLOWED:
             continue
