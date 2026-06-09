@@ -131,6 +131,20 @@ paths are deleted only after their replacement's drill is green; provably-dead c
 the archive. Projects are dispositioned case-by-case (delete / keep-and-repair / re-seed) by
 expected-cost comparison at intake re-scoping.
 
+**DG-8 — The overseer is a persistent mind whose memory lives on disk; the session is a cache
+(ratified direction, 9 Jun, after operator step-back).** The requirement is persistent context
+*and* reasoning. What failed in v2 was not persistence but its substrate: continuity rented from
+a provider's opaque session store — one malformed UUID cost 11 silent hours. Resolution: extend
+`memory/overseer.py` (the CORE+EXTRA handoff already exists — N1, extend don't replace) into a
+structured mind: `CHARTER` (immutable) · `BELIEFS.md` (baselines, what-normal-looks-like,
+updated every pulse) · `JOURNAL.jsonl` (append-only: every observation/intervention with its
+rationale) · per-project `DOSSIER.md`. Every pulse: load beliefs + recent journal (+ resume the
+live session when available — the cache hit) → reason → act → **write back**. The 24 h session
+reset becomes compaction, not amnesia. This is *more* persistent than a chat session: it
+survives resets, is auditable (C2/C3), and the reasoning thread carries because each pulse reads
+its own last rationale. BG-5/BG-6 stand unchanged — they guard this mind, they do not
+lobotomise it.
+
 ## 5. Recovery programme
 
 ### Phase A — Freeze & forensics (≤1 day)
@@ -281,16 +295,30 @@ DG-6 depth default D2.5. DG-7 token-economical deletion law; `10_DELETE_MANIFEST
 Phases D–G reworded to zero-touch. Kill procedure updated after the resurrection event
 (supervisor respawned the killed daemon as PID 56404, `restart_count` 0→1) — supervisor first.
 
+**v1.3, 9 June (step-back review, operator-prompted):** course correction — the B–D sequence was
+over-building governance; the governance gradient is as seductive as the demo gradient and this
+document briefly fell for it. "Minimum gate set" replaced by **the hard floor** + failure-driven
+hardening; the next milestone is a certified flagship product with the **daemon** doing the
+work, not hand-executed phases. DG-8 added: overseer as a persistent mind on disk (session =
+cache), extending `memory/overseer.py`. Flagship default: dubbing-studio, by the
+60-second-stranger-demo criterion.
+
 **Conscious cost, accepted deliberately:** this regime front-loads roughly two weeks of
 infrastructure before a single certified product, and the demo gradient will fight it daily.
 The alternative was tried: it burned a week's window at 3% efficiency.
 
-**Minimum gate set to start Phase E** (the rest lands during early F, before the long soak):
-BG-1, BG-2, BG-3, BG-5 (basic: missed-pulse notify), BG-7; Phase C's budgets + kill-switch;
-Phase D's acceptance compiler, authenticity teeth, both calibration controls, and the DG-2
-spot-audit breaker. Deferred to
-F-start: BG-4's full semantics, the launchd top, BG-6's digest compaction (mandatory before the
-7-day soak, not before E).
+**The hard floor (v1.3 — supersedes the "minimum gate set").** Re-cut after a step-back review:
+the B–D sequence as written **exceeded the corpus's own P0 bar** — governance was over-building
+exactly the way features did in the first burn. Mandatory before the flagship runs (days, not
+weeks): attempt budget = 3 + the BG-3 input-hash; kill-switch + a simple burn-rate pause
+(thresholds, not CUSUM); the BG-1 boot self-test; BG-2 as a bare project cap (= 1, count check);
+ported `error_triage` + AIMD (organs already staged); BG-5 basic (missed-pulse notify); the
+acceptance compiler + authenticity teeth + cross-provider judge (without these, "impressive"
+regresses to stubs under zero-touch); one manual negative control. **Everything else is pulled
+in failure-driven:** a deferred check lands when an incident on the flagship path demands it
+(BG-7 unchanged — incidents become tests within 24 h). Full BG-4 semantics, launchd, digest
+compaction, CUSUM formality, the positive-control harness: deferred to the first soak unless
+reality summons them earlier.
 
 ## 10. Adoption checklist
 1. Copy this file + `RUN_LEDGER.md` skeleton into the live v2 repo; commit.
