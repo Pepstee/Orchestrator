@@ -5,7 +5,10 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-SKIP = {".venv", "__pycache__", ".git", "projects", ".ruff_cache", ".pytest_cache", "tests"}
+SKIP = {".venv", "__pycache__", ".git", "projects", ".ruff_cache", ".pytest_cache", "tests", "docs"}
+# docs/ added 9 Jun 2026: staged v1 port organs (docs/planning/port/) are non-importable donor
+# material, not runtime source — L7's intent is that no RUNTIME path raw-writes. Each organ is
+# reworked through atomic_io as it is ported into a live layer (PORT_LEDGER.md).
 ALLOWED = {"infra/atomic_io.py"}  # the sanctioned writer/deleter
 
 FORBIDDEN = [
