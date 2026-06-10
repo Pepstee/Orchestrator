@@ -43,7 +43,12 @@ AGENT_MODELS: dict[str, dict[str, str]] = {
     "builder":      {"provider": "claude", "model": "sonnet"},   # cascades local->sonnet->opus by difficulty
     "tester":       {"provider": "claude", "model": "sonnet"},   # independent test-author (mutation gate backs it)
     "judge":        {"provider": "openai", "model": "codex"},    # cross-provider independence (F5)
-    "overseer":     {"provider": "claude", "model": "opus"},     # high-stakes judgment (bounded)
+    # Overseer promoted Opus 4.8 -> Fable 5 (operator decision, 9 Jun 2026; DG-3: strongest model
+    # to the highest-stakes judgement role first). Metric to watch per DG-3: retries-per-completion
+    # and tokens-per-certified-criterion — the premium must pay for itself in fewer attempts.
+    # If the host CLI rejects the model string, the failure is PERMANENT (loud) and the env
+    # override AGENTIC_OVERSEER="claude:opus" reroutes it without a code change.
+    "overseer":     {"provider": "claude", "model": "claude-fable-5"},
 }
 
 
