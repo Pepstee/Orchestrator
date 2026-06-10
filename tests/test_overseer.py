@@ -21,7 +21,7 @@ def _payload(instruction: str, project: str = "demo", context: str = "") -> dict
 def test_overseer_acts_and_spawns_revalidate(tmp_path: Path):
     res = run(_payload("fix the failing import"),
               call=_stub('Fixed it.\n{"action": "fixed the import in app.py", "revalidate": true}'),
-              projects_root=str(tmp_path))
+              projects_root=str(tmp_path), state_root=str(tmp_path))
     assert res.ok
     assert "fixed the import" in res.summary
     assert len(res.spawned_tasks) == 1 and res.spawned_tasks[0]["task_type"] == "validate"
@@ -31,18 +31,18 @@ def test_overseer_acts_and_spawns_revalidate(tmp_path: Path):
 def test_overseer_no_revalidate_when_not_directed(tmp_path: Path):
     res = run(_payload("just summarise the code"),
               call=_stub('Looked it over.\n{"action": "inspected", "revalidate": false}'),
-              projects_root=str(tmp_path))
+              projects_root=str(tmp_path), state_root=str(tmp_path))
     assert res.ok and res.spawned_tasks == []
 
 
 def test_overseer_llm_failure_is_safe(tmp_path: Path):
     def boom(*_a, **_k):
         raise RuntimeError("no claude on PATH")
-    res = run(_payload("do a thing"), call=boom, projects_root=str(tmp_path))
+    res = run(_payload("do a thing"), call=boom, projects_root=str(tmp_path), state_root=str(tmp_path))
     assert not res.ok and "overseer call failed" in res.summary and "RuntimeError" in (res.cause or "")
 
 
-def test_parse_directive_tolerates_fences_and_prose():
+def test_parse_directive_tolerates_fences_and_prose(tmp_path):
     assert parse_directive('done\n```json\n{"action": "a", "revalidate": true}\n```')["revalidate"] is True
     assert parse_directive("no json at all") == {}
 
@@ -63,9 +63,9 @@ def _meta_payload(mode: str, *, context: str = "", session_id: str = "S1") -> di
                      "payload": {"mode": mode, "context": context, "session_id": session_id, "resume": True}}}
 
 
-def test_observe_runs_in_resumed_session_at_root():
+def test_observe_runs_in_resumed_session_at_root(tmp_path):
     call, seen = _capturing_stub("Projects A and B progressing; C stalled.")
-    res = run(_meta_payload("observe", context="A: done; C: failed"), call=call)
+    res = run(_meta_payload("observe", context="A: done; C: failed"), call=call, state_root=str(tmp_path))
     assert res.ok and "overseer observed" in res.summary
     assert seen["session_id"] == "S1" and seen["resume"] is True   # resumed the persistent session
     assert seen["cwd"] is None                                     # stable cwd (repo root), not a project dir
@@ -97,34 +97,34 @@ def test_succession_fails_loudly_without_handoff(tmp_path: Path):
 
 # --- cross-project authority: the overseer directs new work via enqueue directives ---
 
-def test_observe_enqueues_directed_work():
+def test_observe_enqueues_directed_work(tmp_path):
     out = ('C is stalled; A and B are healthy. We should start a backup tool.\n'
            '{"enqueue": [{"project": "backup-tool", "goal": "Build a stdlib backup CLI"}]}')
     call, _ = _capturing_stub(out)
-    res = run(_meta_payload("observe"), call=call)
+    res = run(_meta_payload("observe"), call=call, state_root=str(tmp_path))
     assert res.ok and len(res.spawned_tasks) == 1
     t = res.spawned_tasks[0]
     assert t["task_type"] == "plan" and t["project"] == "backup-tool" and "backup" in t["title"]
 
 
-def test_observe_guardrail_blocks_reserved_and_empty_targets():
+def test_observe_guardrail_blocks_reserved_and_empty_targets(tmp_path):
     out = '{"enqueue": [{"project": "__overseer__", "goal": "tamper"}, {"project": "ok", "goal": ""}, {"project": "real", "goal": "do it"}]}'
     call, _ = _capturing_stub(out)
-    res = run(_meta_payload("observe"), call=call)
+    res = run(_meta_payload("observe"), call=call, state_root=str(tmp_path))
     projects = [t["project"] for t in res.spawned_tasks]
     assert projects == ["real"]               # reserved (__) and goal-less directives are dropped
 
 
-def test_observe_enqueue_is_bounded():
+def test_observe_enqueue_is_bounded(tmp_path):
     items = ",".join(f'{{"project": "p{i}", "goal": "g{i}"}}' for i in range(20))
     call, _ = _capturing_stub('{"enqueue": [' + items + ']}')
-    res = run(_meta_payload("observe"), call=call)
+    res = run(_meta_payload("observe"), call=call, state_root=str(tmp_path))
     assert len(res.spawned_tasks) == 5        # MAX_OVERSEER_ENQUEUES caps runaway direction
 
 
-def test_observe_without_directives_spawns_nothing():
+def test_observe_without_directives_spawns_nothing(tmp_path):
     call, _ = _capturing_stub("Everything looks healthy; nothing to start.")
-    res = run(_meta_payload("observe"), call=call)
+    res = run(_meta_payload("observe"), call=call, state_root=str(tmp_path))
     assert res.ok and res.spawned_tasks == []
 
 
@@ -134,7 +134,7 @@ def test_charter_is_carried_into_observe_and_succession(tmp_path: Path):
     from memory.overseer import OVERSEER_CHARTER
 
     call_o, seen_o = _capturing_stub("ok")
-    run(_meta_payload("observe"), call=call_o)
+    run(_meta_payload("observe"), call=call_o, state_root=str(tmp_path))
     assert OVERSEER_CHARTER in seen_o["system"]
     assert "accountable for the orchestrator" in seen_o["system"].lower()
 
@@ -151,14 +151,14 @@ def test_charter_is_carried_into_intervene(tmp_path: Path):
         seen["system"] = system
         return LLMResult(text='{"action": "x", "revalidate": false}', cost_usd=0.0, model="opus")
 
-    run(_payload("fix it"), call=call, projects_root=str(tmp_path))
+    run(_payload("fix it"), call=call, projects_root=str(tmp_path), state_root=str(tmp_path))
     assert OVERSEER_CHARTER in seen["system"] and "NEVER modify the orchestrator" in seen["system"]
 
 
-def test_observe_abandon_directive_spawns_control_task():
+def test_observe_abandon_directive_spawns_control_task(tmp_path):
     out = '{"abandon": [{"project": "doomed", "reason": "unbuildable"}, {"project": "__overseer__", "reason": "x"}]}'
     call, _ = _capturing_stub(out)
-    res = run(_meta_payload("observe"), call=call)
+    res = run(_meta_payload("observe"), call=call, state_root=str(tmp_path))
     controls = [t for t in res.spawned_tasks if t["task_type"] == "control"]
     assert len(controls) == 1                                  # reserved target dropped
     p = controls[0]["payload"]
@@ -166,10 +166,10 @@ def test_observe_abandon_directive_spawns_control_task():
     assert controls[0]["project"] == "__overseer__"            # the control task itself is a meta-task
 
 
-def test_observe_reprioritise_directive_spawns_control_task():
+def test_observe_reprioritise_directive_spawns_control_task(tmp_path):
     out = '{"reprioritise": [{"project": "urgent", "priority": 10}]}'
     call, _ = _capturing_stub(out)
-    res = run(_meta_payload("observe"), call=call)
+    res = run(_meta_payload("observe"), call=call, state_root=str(tmp_path))
     controls = [t for t in res.spawned_tasks if t["task_type"] == "control"]
     assert len(controls) == 1
     p = controls[0]["payload"]
