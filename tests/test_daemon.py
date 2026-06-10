@@ -61,3 +61,29 @@ def test_serve_ingests_inbox_then_runs(tmp_path: Path):
     total = serve(repo, _gov(tmp_path), _ok, should_stop=lambda: _all_terminal(repo),
                   poll_interval=0, inbox=str(inbox))
     assert total == 1 and repo.get("t1").status == TaskStatus.DONE
+
+
+# ---- AGENTIC_DEADLINE_HOURS: the strictly bounded run (self-written STOP at expiry) ----
+
+def test_deadline_writes_stop_once_and_stays_true(tmp_path):
+    from control.daemon import deadline_should_stop
+    calls, st, boot = [], {}, 1000.0
+
+    def notifier(_title, message):
+        calls.append(message)
+    assert not deadline_should_stop(tmp_path, st, boot=boot, hours=10,
+                                    now=boot + 9.9 * 3600, notifier=notifier)
+    assert not (tmp_path / "STOP").exists()
+    assert deadline_should_stop(tmp_path, st, boot=boot, hours=10,
+                                now=boot + 10 * 3600 + 1, notifier=notifier)
+    assert (tmp_path / "STOP").exists(), "a self-chosen stop must stay stopped (supervisor reads it)"
+    assert len(calls) == 1 and "deadline" in calls[0]
+    assert deadline_should_stop(tmp_path, st, boot=boot, hours=10,
+                                now=boot + 11 * 3600, notifier=notifier)
+    assert len(calls) == 1, "notify once, not every poll"
+
+
+def test_zero_deadline_means_unbounded(tmp_path):
+    from control.daemon import deadline_should_stop
+    assert not deadline_should_stop(tmp_path, {}, boot=0.0, hours=0, now=1e12)
+    assert not (tmp_path / "STOP").exists()

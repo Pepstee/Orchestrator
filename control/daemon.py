@@ -32,6 +32,7 @@ from dispatch.dispatcher import Invoke, PAConsult, propagate_prerequisite_failur
 from dispatch.repository import TaskRepository
 from dispatch.runner import make_subprocess_invoke
 from infra import pidlock
+from infra.atomic_io import write_text_atomic
 from infra.event_store import EventStore
 from infra.notify import notify
 from infra.workspace import default_projects_root, resolve_project_dir
@@ -386,6 +387,25 @@ def serve(
     return total
 
 
+def deadline_should_stop(root: Path, state: dict, *, boot: float, hours: float,
+                         now: float | None = None, notifier: Callable = notify) -> bool:
+    """``AGENTIC_DEADLINE_HOURS`` — a strictly bounded run (L6 in time, not just iterations).
+    At expiry: write the STOP sentinel (a self-chosen stop stays stopped — the supervisor sees
+    it and stays down) and notify ONCE; the serve loop then drains in-flight work and exits
+    gracefully. 0 = no deadline."""
+    if hours <= 0:
+        return False
+    now = time.time() if now is None else now
+    if now - boot < hours * 3600:
+        return False
+    if not state.get("notified"):
+        write_text_atomic(root / "STOP", f"deadline: {hours:g}h run completed\n")
+        notifier("Orchestrator", f"{hours:g}h deadline reached — draining in-flight work, "
+                                 "then staying down (STOP written)")
+        state["notified"] = True
+    return True
+
+
 def main() -> None:
     root = Path(__file__).resolve().parents[1]
     state = root / "state"
@@ -418,9 +438,13 @@ def main() -> None:
         kill_switch_path=state / "KILL",
     )
     stop_sentinel = root / "STOP"
+    boot = time.time()
+    deadline_hours = float(os.environ.get("AGENTIC_DEADLINE_HOURS", "0") or 0)
+    deadline_state: dict = {}
 
     def should_stop() -> bool:
-        return stopped["flag"] or stop_sentinel.exists() or governor.should_stop()[0]
+        return (stopped["flag"] or stop_sentinel.exists() or governor.should_stop()[0]
+                or deadline_should_stop(root, deadline_state, boot=boot, hours=deadline_hours))
 
     evaluated: dict[str, frozenset] = {}
     burn_flag = {"notified": False}
