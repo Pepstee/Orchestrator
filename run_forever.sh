@@ -23,13 +23,14 @@ fi
 echo $$ > "$LOCK"
 trap 'rm -f "$LOCK"' EXIT
 
-export AGENTIC_JUDGE="${AGENTIC_JUDGE:-claude:opus}"
+# Judge runs on the REGISTRY default (openai/codex — cross-provider anti-collusion, D4).
+# Override only for a provider outage: AGENTIC_JUDGE="claude:opus" ./run_forever.sh
 export AGENTIC_BUDGET_USD="${AGENTIC_BUDGET_USD:-1000000}"
 export AGENTIC_MAX_WORKERS="${AGENTIC_MAX_WORKERS:-20}"
 PY="${PYTHON:-python3}"
 
 while [ ! -f STOP ]; do
-  echo "[supervisor] $(date '+%F %T') launching daemon (workers=$AGENTIC_MAX_WORKERS, judge=$AGENTIC_JUDGE)"
+  echo "[supervisor] $(date '+%F %T') launching daemon (workers=$AGENTIC_MAX_WORKERS, judge=${AGENTIC_JUDGE:-registry default})"
   "$PY" -m control.daemon
   code=$?
   [ -f STOP ] && break
