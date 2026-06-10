@@ -20,6 +20,9 @@ def _setup(tmp_path: Path):
                      depends_on=["b1"], project="demo"))
     gov = BudgetGovernor(EventStore(tmp_path / "spend.log"), cap_usd=0.0,
                          kill_switch_path=tmp_path / "KILL")
+    proj = tmp_path / "demo"        # D25: acceptance must be DECLARED — no default-pass gates
+    proj.mkdir(exist_ok=True)
+    (proj / "acceptance").write_text("echo demo ok\n", encoding="utf-8")
     return repo, gov
 
 

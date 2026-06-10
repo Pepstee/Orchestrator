@@ -45,6 +45,10 @@ LAWS: list[Law] = [
     Law("BG5", "Guardian liveness is guarded (wedged or failing overseer pulses alarm; "
         "never a silent dead guardian)", "active",
         "tests/test_overseer_mind.py"),
+    Law("D25", "Acceptance is demonstrated by execution — no declaration is a failure, "
+        "mock paths are refused, every criterion runs (no default-pass gates under zero-touch)",
+        "active",
+        "tests/test_acceptance_exec.py"),
 
     # Deferred — subsystem not built yet; check planned (gap kept explicit and traceable).
     Law("L4", "Deliverable purity (project tree isolated; no orchestrator scratch)", "active",

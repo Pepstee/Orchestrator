@@ -15,6 +15,13 @@ PASS = ("python", "-c", "raise SystemExit(0)")
 OK_TIERS = [lambda _d: GateResult("ok", True)]   # trivial passing assurance for non-assurance tests
 
 
+def _demo_dir(root: Path) -> Path:
+    """The demo project dir WITH a declared acceptance criterion (D25: no default-pass gates)."""
+    proj = resolve_project_dir(root, "demo")
+    (proj / "acceptance").write_text("echo demo ok\n", encoding="utf-8")
+    return proj
+
+
 def _finished_project(repo: TaskRepository) -> None:
     repo.create(Task(task_id="b", title="build", task_type="implement", project="demo"))
     repo.create(Task(task_id="v", title="judge", task_type="validate", project="demo", depends_on=["b"]))
@@ -26,7 +33,7 @@ def _finished_project(repo: TaskRepository) -> None:
 def test_evaluate_project_complete(tmp_path: Path):
     repo = TaskRepository(EventStore(tmp_path / "e.log"))
     _finished_project(repo)
-    resolve_project_dir(tmp_path, "demo")   # ensure the project dir exists for the test gate
+    _demo_dir(tmp_path)
     out = evaluate_project(repo, project="demo", projects_root=str(tmp_path), test_command=PASS)
     assert out.gates == {"tests": True, "acceptance": True, "judge": True, "authenticity": True}
     assert out.complete   # all automated gates pass -> self-certified, no human gate
@@ -35,7 +42,7 @@ def test_evaluate_project_complete(tmp_path: Path):
 def test_monitor_finalises_hardens_and_records(tmp_path: Path):
     repo = TaskRepository(EventStore(tmp_path / "e.log"))
     _finished_project(repo)
-    resolve_project_dir(tmp_path, "demo")
+    _demo_dir(tmp_path)
     hardened = []
     tiers = [lambda pd: (hardened.append(pd) or GateResult("edge", True))]
     evaluated: dict = {}
@@ -58,7 +65,7 @@ def test_failed_assurance_blocks_the_ping_and_calls_overseer(tmp_path: Path):
     the project goes to the overseer, it does NOT land in your confirmation tray (charter bar 6)."""
     repo = TaskRepository(EventStore(tmp_path / "e.log"))
     _finished_project(repo)
-    resolve_project_dir(tmp_path, "demo")
+    _demo_dir(tmp_path)
     fail_tiers = [lambda _d: GateResult("mutation", False, "score 1/5")]
     outs = monitor_projects(repo, {}, projects_root=str(tmp_path), test_command=PASS, tiers=fail_tiers)
     assert outs and outs[0].complete                      # automated gates passed...
@@ -74,7 +81,7 @@ def test_self_certify_opens_a_forever_improve_round(tmp_path: Path):
     keeps making it better (security, tests, UX, perf, features...) instead of going idle."""
     repo = TaskRepository(EventStore(tmp_path / "e.log"))
     _finished_project(repo)
-    resolve_project_dir(tmp_path, "demo")
+    _demo_dir(tmp_path)
     monitor_projects(repo, {}, projects_root=str(tmp_path), test_command=PASS, tiers=OK_TIERS)
     confirmed = [e for e in EventStore(str(tmp_path / "e.log")).replay() if e.kind == "project_confirmed"]
     improve = [t for t in repo.list() if t.task_type == "plan"
@@ -92,7 +99,7 @@ def test_monitor_skips_in_progress_project(tmp_path: Path):
 def test_monitor_finalises_each_project_once(tmp_path: Path):
     repo = TaskRepository(EventStore(tmp_path / "e.log"))
     _finished_project(repo)
-    resolve_project_dir(tmp_path, "demo")
+    _demo_dir(tmp_path)
     evaluated: dict = {}
     assert len(monitor_projects(repo, evaluated, projects_root=str(tmp_path),
                                 test_command=PASS, tiers=OK_TIERS)) == 1
@@ -103,7 +110,7 @@ def test_monitor_finalises_each_project_once(tmp_path: Path):
 def test_monitor_records_failed_gates_without_hardening(tmp_path: Path):
     repo = TaskRepository(EventStore(tmp_path / "e.log"))
     _finished_project(repo)
-    resolve_project_dir(tmp_path, "demo")
+    _demo_dir(tmp_path)
     hardened = []
     tiers = [lambda pd: (hardened.append(pd) or GateResult("edge", True))]
     # failing tests -> not pending_user -> no assurance
@@ -126,7 +133,7 @@ def test_superseded_failed_validate_does_not_poison_judge(tmp_path: Path):
     repo.create(Task(task_id="v_new", title="validate", task_type="validate", project="demo"))
     repo.apply("v_new", Event.CLAIM)
     repo.apply("v_new", Event.COMPLETE)              # a fresh pass supersedes it
-    resolve_project_dir(tmp_path, "demo")
+    _demo_dir(tmp_path)
     out = evaluate_project(repo, project="demo", projects_root=str(tmp_path), test_command=PASS)
     assert out.gates["judge"] and out.complete
 
@@ -152,7 +159,7 @@ def test_monitor_replans_when_gates_unmet_and_under_cap(tmp_path: Path):
     repo.create(Task(task_id="b", title="impl", task_type="implement", project="demo"))
     repo.apply("b", Event.CLAIM)
     repo.apply("b", Event.FAIL)                       # build failed -> acceptance gate unmet
-    resolve_project_dir(tmp_path, "demo")
+    _demo_dir(tmp_path)
     monitor_projects(repo, {}, projects_root=str(tmp_path), test_command=PASS,
                      tiers=[lambda _d: GateResult("t", True)])
     plans = [t for t in repo.list() if t.project == "demo" and t.task_type == "plan"]
@@ -166,7 +173,7 @@ def test_monitor_overseer_steps_in_when_planner_stalls(tmp_path: Path):
     repo.create(Task(task_id="p", title="Build X", task_type="plan", project="demo"))
     repo.apply("p", Event.CLAIM)
     repo.apply("p", Event.COMPLETE)                   # plan done, no builder/validator work after -> planner spent
-    resolve_project_dir(tmp_path, "demo")
+    _demo_dir(tmp_path)
     monitor_projects(repo, {}, projects_root=str(tmp_path), test_command=PASS,
                      tiers=[lambda _d: GateResult("t", True)])
     oversee = [t for t in repo.list() if t.project == "demo" and t.task_type == "oversee"]
@@ -185,7 +192,7 @@ def test_monitor_abandons_after_overseer_exhausted(tmp_path: Path):
         repo.create(Task(task_id=f"o{i}", title="fix", task_type="oversee", project="demo"))
         repo.apply(f"o{i}", Event.CLAIM)
         repo.apply(f"o{i}", Event.FAIL)
-    resolve_project_dir(tmp_path, "demo")
+    _demo_dir(tmp_path)
     monitor_projects(repo, {}, projects_root=str(tmp_path), test_command=PASS,
                      tiers=[lambda _d: GateResult("t", True)])
     events = list(EventStore(str(tmp_path / "e.log")).replay())
@@ -200,7 +207,7 @@ def test_improve_loop_continues_then_stops_when_maxed(tmp_path: Path):
     loop STOPS (no tight empty cycling) — exactly the bounded-by-productivity behaviour."""
     repo = TaskRepository(EventStore(tmp_path / "e.log"))
     _finished_project(repo)
-    resolve_project_dir(tmp_path, "demo")
+    _demo_dir(tmp_path)
     evaluated: dict = {}
     assert len(monitor_projects(repo, evaluated, projects_root=str(tmp_path),
                                 test_command=PASS, tiers=OK_TIERS)) == 1     # certify + open improve round

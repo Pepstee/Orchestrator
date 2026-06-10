@@ -20,6 +20,7 @@ from core.models import Task, TaskStatus
 from dispatch.dispatcher import Invoke
 from dispatch.repository import TaskRepository
 from infra.workspace import default_projects_root, resolve_project_dir
+from validation.acceptance_exec import run_acceptance_gate
 from validation.authenticity import scan_authenticity
 from validation.gates import DEFAULT_TEST_COMMAND, CompletionResult, evaluate_completion, run_test_gate
 
@@ -63,12 +64,15 @@ def evaluate_project(
     builds = [t for t in proj_tasks if t.task_type != "validate"]
     validates = [t for t in proj_tasks if t.task_type == "validate"]
 
-    acceptance = bool(builds) and all(t.status == TaskStatus.DONE for t in builds)
+    builds_done = bool(builds) and all(t.status == TaskStatus.DONE for t in builds)
     judge_ok = bool(validates) and all(t.status == TaskStatus.DONE for t in validates)
 
     root = Path(projects_root) if projects_root else default_projects_root()
     project_dir = resolve_project_dir(root, project)
     tests_ok = run_test_gate(str(project_dir), command=test_command).passed
+    # "Meets intent" is DEMONSTRATED, never inferred from closed tasks (the toothless proxy that
+    # certified stubs): every declared acceptance criterion must execute against the real product.
+    acceptance = builds_done and run_acceptance_gate(str(project_dir)).passed
     authentic = scan_authenticity(str(project_dir)).passed   # no stubs/placeholders/mocks (charter bar 1)
 
     gates = {"tests": tests_ok, "acceptance": acceptance, "judge": judge_ok, "authenticity": authentic}
