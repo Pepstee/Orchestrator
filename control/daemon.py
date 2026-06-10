@@ -230,6 +230,29 @@ def _enqueue_meta(repo: TaskRepository, mode: str, session_id: str, *, resume: b
     ))
 
 
+def overseer_pulse_health(repo: TaskRepository, meta: dict, notifier: Callable = notify) -> bool:
+    """BG-5 (basic): detect a wedged or dying guardian — the failure class that once went silent
+    for eleven hours. Unhealthy = ≥2 outstanding pulses (enqueued but never finishing) OR the two
+    most recent terminal oversee runs both failed. Notifies once per episode, clears on recovery.
+    Returns True only for the WEDGE (callers stop stacking pulses); a failed streak still permits
+    fresh pulses — a new session is the self-heal, and budgets bound the cost."""
+    oversee = [t for t in repo.list()
+               if t.project == OVERSEER_PROJECT and t.task_type == "oversee"]
+    pending = sum(1 for t in oversee
+                  if t.status in (TaskStatus.QUEUED, TaskStatus.IN_PROGRESS))
+    terminal = [t for t in oversee if t.status in (TaskStatus.DONE, TaskStatus.FAILED)]
+    failed_streak = len(terminal) >= 2 and all(
+        t.status == TaskStatus.FAILED for t in terminal[-2:])
+    unhealthy = pending >= 2 or failed_streak
+    if unhealthy and not meta.get("pulse_alarm"):
+        notifier("Overseer", f"BG-5: guardian unhealthy — {pending} pulse(s) outstanding"
+                             + ("; last two runs failed" if failed_streak else ""))
+        meta["pulse_alarm"] = True
+    elif not unhealthy:
+        meta["pulse_alarm"] = False
+    return pending >= 2
+
+
 def tick_overseer_session(
     repo: TaskRepository,
     session_path: Path,
@@ -247,6 +270,7 @@ def tick_overseer_session(
     All meta-tasks resume the SAME session, giving continuity of reasoning; the daily reset bounds
     context growth (A3), with the handoff carrying memory across the wipe."""
     now = time.time() if now is None else now
+    wedged = overseer_pulse_health(repo, meta)   # BG-5: alarm before anything else
     session = load_session(session_path)
     if session is None or due_for_reset(session, now=now):
         rotating = session is not None
@@ -261,6 +285,9 @@ def tick_overseer_session(
         if rotating:
             notify("Overseer", "session reset — fresh cycle, seeded from handoff")
         return
+
+    if wedged:
+        return   # don't stack more meta-tasks on a wedged guardian; budgets terminalise the stuck ones
 
     if due_for_succession(session, now=now) and meta.get("succession_for") != session.session_id:
         _enqueue_meta(repo, "succession", session.session_id, resume=True, context=_status_summary(repo))

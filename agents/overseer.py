@@ -30,7 +30,16 @@ from core.models import AgentResult, Task
 from infra.atomic_io import write_text_atomic
 from infra.llm import LLMResult, call_llm
 from infra.workspace import task_workdir
-from memory.overseer import compose_handoff_prompt, frame_system, load_handoff_extra, save_handoff_extra
+from memory.overseer import (
+    append_journal,
+    compose_handoff_prompt,
+    default_mind_dir,
+    frame_system,
+    load_handoff_extra,
+    mind_context,
+    save_beliefs,
+    save_handoff_extra,
+)
 from registry.agents import model_for
 
 SYSTEM_PROMPT = (
@@ -43,16 +52,20 @@ SYSTEM_PROMPT = (
 )
 
 OBSERVE_SYSTEM = (
-    "You are the persistent Overseer meta-agent, reasoning across the WHOLE orchestrator with "
-    "continuous memory of this ongoing session. You are not editing files now — you are thinking and "
-    "DIRECTING. Review the system state and assess what matters: which projects progress, which "
-    "stall, what should be started. You may DIRECT work, ending with a JSON object: "
-    "{\"enqueue\": [{\"project\": \"name\", \"goal\": \"...\"}], \"abandon\": [{\"project\": \"name\", "
+    "You are the persistent Overseer meta-agent, reasoning across the WHOLE orchestrator. Your "
+    "CANONICAL memory is your durable mind on disk (beliefs + journal, included in the prompt); the "
+    "session you may be resumed into is only a cache of it. You are not editing files now — you are "
+    "thinking and DIRECTING. Review the system state against your beliefs: which projects progress, "
+    "which stall, what should be started, what changed since your last pulse. End with ONE JSON "
+    "object: {\"journal\": \"<2-6 sentences to your future self: what you observed, what you decided, "
+    "and WHY>\", \"beliefs_update\": \"<full replacement of your beliefs file when your model of "
+    "what-normal-looks-like changed, else empty>\", "
+    "\"enqueue\": [{\"project\": \"name\", \"goal\": \"...\"}], \"abandon\": [{\"project\": \"name\", "
     "\"reason\": \"...\"}], \"reprioritise\": [{\"project\": \"name\", \"priority\": 10}]} — `enqueue` "
     "starts new or repeat work, `abandon` stops a doomed project (re-enqueueable later), `reprioritise` "
-    "raises/lowers what runs first (higher = sooner). Omit or leave empty if nothing is needed. Hard "
-    "limits: you NEVER target the orchestrator itself, only project work; the operator remains the "
-    "final completion gate. Be concise and concrete."
+    "raises/lowers what runs first (higher = sooner). The journal field is REQUIRED; leave the others "
+    "empty if nothing is needed. Hard limits: you NEVER target the orchestrator itself, only project "
+    "work. Be concise and concrete."
 )
 
 # Bound how much new work one observation may start (law L6: bounded autonomy).
@@ -107,7 +120,8 @@ def _default_state_root() -> Path:
     return Path(__file__).resolve().parents[1] / "state"
 
 
-def _run_intervene(task: Task, call: LLMCall, projects_root: str | None) -> AgentResult:
+def _run_intervene(task: Task, call: LLMCall, projects_root: str | None,
+                   mind: Path | None = None) -> AgentResult:
     instruction = task.title
     context = str(task.payload.get("context", "")) if isinstance(task.payload, dict) else ""
     spec = model_for("overseer")
@@ -126,6 +140,8 @@ def _run_intervene(task: Task, call: LLMCall, projects_root: str | None) -> Agen
         spawned.append(Task(task_id=uuid.uuid4().hex[:12],
                             title=f"Re-validate after overseer: {instruction}"[:200],
                             task_type="validate", project=task.project).to_dict())
+    append_journal(mind or default_mind_dir(),
+                   {"mode": "intervene", "project": task.project, "note": action[:500]})
     return AgentResult(ok=True, summary=f"overseer: {action}"[:200], spawned_tasks=spawned,
                        metadata={"cost_usd": res.cost_usd, "model": res.model or spec["model"]})
 
@@ -197,27 +213,43 @@ def _reprioritise_directives(text: str) -> list[dict]:
     return spawned
 
 
-def _run_observe(task: Task, call: LLMCall) -> AgentResult:
+def _run_observe(task: Task, call: LLMCall, mind: Path | None = None) -> AgentResult:
+    mind = mind or default_mind_dir()
     context = str(task.payload.get("context", "")) if isinstance(task.payload, dict) else ""
     spec = model_for("overseer")
+    recollection = mind_context(mind)
     prompt = (
-        (f"Current system state:\n{context}\n\n" if context else "")
-        + "Assess the orchestrator now: what is progressing, what is stalling, and what should be "
-          "started or re-run? If you decide to direct new work, end with the enqueue JSON object."
+        (f"YOUR DURABLE MIND (written by you, for you — your canonical memory):\n{recollection}\n\n"
+         if recollection else "")
+        + (f"Current system state:\n{context}\n\n" if context else "")
+        + "Assess the orchestrator now against your beliefs: what is progressing, what is stalling, "
+          "what changed since your last pulse, and what should be started or re-run? End with the "
+          "single JSON object (journal required)."
     )
     try:
         res = call(spec["provider"], spec["model"], prompt, system=frame_system(OBSERVE_SYSTEM), **_session_args(task))
     except Exception as exc:
+        # Even a failed pulse leaves a trace — the thread of thought must have no silent gaps.
+        append_journal(mind, {"mode": "observe", "note": f"pulse failed: {type(exc).__name__}: {exc}"[:500]})
         return AgentResult(ok=False, summary="overseer observe failed", cause=f"{type(exc).__name__}: {exc}")
     spawned = (_enqueue_directives(res.text) + _abandon_directives(res.text)
                + _reprioritise_directives(res.text))
+    data = _extract_json_object(res.text)
     first = res.text.strip().splitlines()[0][:200] if res.text.strip() else "observed"
+    note = str(data.get("journal") or "").strip() or first
+    append_journal(mind, {"mode": "observe", "note": note[:1500],
+                          "directed": len(spawned), "session": res.session_id})
+    beliefs_update = str(data.get("beliefs_update") or "").strip()
+    if beliefs_update:
+        save_beliefs(mind, beliefs_update)   # whole-file replacement, length-capped (DG-8)
     summary = f"overseer observed: {first}" + (f"; directed {len(spawned)} action(s)" if spawned else "")
     return AgentResult(ok=True, summary=summary[:200], spawned_tasks=spawned,
-                       metadata={"cost_usd": res.cost_usd, "session_id": res.session_id})
+                       metadata={"cost_usd": res.cost_usd, "session_id": res.session_id,
+                                 "beliefs_updated": bool(beliefs_update)})
 
 
-def _run_succession(task: Task, call: LLMCall, state_root: Path) -> AgentResult:
+def _run_succession(task: Task, call: LLMCall, state_root: Path,
+                    mind: Path | None = None) -> AgentResult:
     context = str(task.payload.get("context", "")) if isinstance(task.payload, dict) else ""
     extra_path = state_root / "handoff_extra.md"
     handoff_path = state_root / "handoff_latest.md"
@@ -242,6 +274,11 @@ def _run_succession(task: Task, call: LLMCall, state_root: Path) -> AgentResult:
     write_text_atomic(handoff_path, handoff)
     if improved:
         save_handoff_extra(extra_path, improved)   # only EXTRA (data) is revised; CORE is untouchable
+    append_journal(mind or default_mind_dir(),
+                   {"mode": "succession",
+                    "note": f"session reset due — wrote handoff ({len(handoff)} chars)"
+                            + ("; improved EXTRA" if improved else "")
+                            + ". The reset is compaction, not amnesia: beliefs/journal persist."})
     return AgentResult(ok=True,
                        summary=f"wrote succession handoff ({len(handoff)} chars)"
                                + ("; improved EXTRA" if improved else ""),
@@ -253,11 +290,13 @@ def run(payload: dict, call: LLMCall = call_llm, projects_root: str | None = Non
         state_root: str | None = None) -> AgentResult:
     task = Task.from_dict(payload.get("task", {}))
     mode = (task.payload.get("mode") if isinstance(task.payload, dict) else None) or "intervene"
+    root = Path(state_root) if state_root else _default_state_root()
+    mind = root / "overseer"   # the mind rides the same state root (test-injectable)
     if mode == "succession":
-        return _run_succession(task, call, Path(state_root) if state_root else _default_state_root())
+        return _run_succession(task, call, root, mind)
     if mode == "observe":
-        return _run_observe(task, call)
-    return _run_intervene(task, call, projects_root)
+        return _run_observe(task, call, mind)
+    return _run_intervene(task, call, projects_root, mind)
 
 
 if __name__ == "__main__":

@@ -42,6 +42,9 @@ LAWS: list[Law] = [
     Law("BG3", "Failure budgets are durable and every requeue path is finite "
         "(counters derive from the event log; restarts cannot launder a budget)", "active",
         "tests/test_failure_budgets.py"),
+    Law("BG5", "Guardian liveness is guarded (wedged or failing overseer pulses alarm; "
+        "never a silent dead guardian)", "active",
+        "tests/test_overseer_mind.py"),
 
     # Deferred — subsystem not built yet; check planned (gap kept explicit and traceable).
     Law("L4", "Deliverable purity (project tree isolated; no orchestrator scratch)", "active",

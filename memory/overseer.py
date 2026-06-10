@@ -18,12 +18,13 @@ Lives in the `memory` layer so both the overseer (agents) and the daemon (contro
 """
 from __future__ import annotations
 
+import re
 import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-from infra.atomic_io import read_json, write_json_atomic, write_text_atomic
+from infra.atomic_io import append_jsonl, read_json, read_jsonl, write_json_atomic, write_text_atomic
 
 # Rotate the session daily; alert the overseer this far ahead of the wipe to write its handoff.
 DEFAULT_RESET_INTERVAL_S = 24 * 3600
@@ -144,6 +145,75 @@ def frame_system(mode_system: str) -> str:
     """Prepend the immutable charter to a mode-specific system prompt, so the overseer carries its
     identity and responsibility into every call — intervene, observe, and succession alike."""
     return f"{OVERSEER_CHARTER}\n\n{mode_system}"
+
+
+# --------------------------------------------------------------------------- the mind on disk (DG-8)
+# The overseer's canonical memory is a structured directory IT writes back to every pulse; the
+# Claude session is only a cache of it (BG-6). What failed in the June run was not persistence
+# but its substrate — continuity rented from a provider's opaque session store, where one
+# malformed UUID cost eleven silent hours. This survives resets, is auditable, and carries the
+# reasoning thread because each pulse re-reads its own last rationale.
+#   BELIEFS.md        — baselines, what-normal-looks-like; updated (whole-file) by the overseer
+#   journal.jsonl     — append-only: every observation/intervention with its rationale
+#   dossiers/<p>.md   — per-project standing notes
+MAX_BELIEFS_LEN = 12000
+JOURNAL_RECENT_N = 10
+
+
+def default_mind_dir() -> Path:
+    return Path(__file__).resolve().parents[1] / "state" / "overseer"
+
+
+def load_beliefs(mind_dir: Path | str) -> str:
+    return _read_text_or_empty(Path(mind_dir) / "BELIEFS.md")
+
+
+def save_beliefs(mind_dir: Path | str, text: str, *, max_len: int = MAX_BELIEFS_LEN) -> None:
+    """Whole-file replacement, length-capped so a runaway revision can't bloat every future pulse."""
+    write_text_atomic(Path(mind_dir) / "BELIEFS.md", (text or "")[:max_len])
+
+
+def append_journal(mind_dir: Path | str, entry: dict) -> None:
+    """Append one reasoning/action record. The journal is the overseer's thread of thought —
+    append-only, never rewritten (compaction happens in BELIEFS, not by editing history)."""
+    record = dict(entry)
+    record.setdefault("ts", time.time())
+    append_jsonl(Path(mind_dir) / "journal.jsonl", record)
+
+
+def recent_journal(mind_dir: Path | str, n: int = JOURNAL_RECENT_N) -> list[dict]:
+    return list(read_jsonl(Path(mind_dir) / "journal.jsonl"))[-n:]
+
+
+def _dossier_path(mind_dir: Path | str, project: str) -> Path:
+    safe = re.sub(r"[^\w.-]", "_", project or "unnamed")
+    return Path(mind_dir) / "dossiers" / f"{safe}.md"
+
+
+def load_dossier(mind_dir: Path | str, project: str) -> str:
+    return _read_text_or_empty(_dossier_path(mind_dir, project))
+
+
+def save_dossier(mind_dir: Path | str, project: str, text: str,
+                 *, max_len: int = MAX_BELIEFS_LEN) -> None:
+    write_text_atomic(_dossier_path(mind_dir, project), (text or "")[:max_len])
+
+
+def mind_context(mind_dir: Path | str, *, recent: int = JOURNAL_RECENT_N) -> str:
+    """The recollection a pulse wakes with: beliefs + the tail of its own journal. Bounded by
+    construction (capped beliefs + fixed journal tail), so pulse cost cannot creep (BG-6)."""
+    beliefs = load_beliefs(mind_dir).strip()
+    lines = []
+    for e in recent_journal(mind_dir, recent):
+        note = str(e.get("note", "")).strip()
+        if note:
+            lines.append(f"- [{e.get('mode', '?')}] {note}")
+    parts = []
+    if beliefs:
+        parts.append(f"## Your beliefs (you wrote these)\n{beliefs}")
+    if lines:
+        parts.append("## Your recent journal (newest last)\n" + "\n".join(lines))
+    return "\n\n".join(parts)
 
 
 def load_handoff_extra(path: Path | str) -> str:
