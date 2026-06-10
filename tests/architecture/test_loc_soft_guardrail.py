@@ -16,7 +16,11 @@ def test_loc_soft_guardrail_is_non_blocking():
     limit = SOFT_LIMIT
     offenders = []
     for p in ROOT.rglob("*.py"):
-        if any(part in SKIP for part in p.parts):
+        # Skip archives and donor material along with the usual dirs: the guardrail watches the
+        # ORCHESTRATOR's own source for god-files; archived deliverables alarming on every run
+        # is the repeat-alert pathology (BG-4) in miniature.
+        if any(part in SKIP or part.startswith("projects.") or ".archived-" in part
+               or part == "docs" for part in p.parts):
             continue
         n = len(p.read_text(encoding="utf-8").splitlines())
         if n > limit:

@@ -44,7 +44,7 @@ arrive via the port ledger's per-module tests.
 |-----|--------|--------------|--------------------|--------|
 | B1 | String-matched failure classifier | legacy logic, re-broke solved problem | **DONE 9 Jun:** `infra/triage.py` (reworked v1 organ) is the single taxonomy; `infra/llm.py` re-exports for compatibility; PERMANENT class fails fast. AIMD half: **waived** (see port ledger) | ☑ 9 Jun |
 | B2 | Toothless gate-proxy bodies in `validation/gates.py` | working incorrectly | Phase D gates with teeth (tuple itself stays — ratified DG-2) | ⛔M |
-| B3 | Overseer chat-resume **dependency** (resume-or-die path) | working incorrectly | BG-6 stateless pulse; resume demoted to optimisation | ⛔M |
+| B3 | Overseer chat-resume **dependency** (resume-or-die path) | working incorrectly | **DONE 9 Jun:** resume-fallback in `infra/llm.py` (a dead session mints a fresh one) + DG-8 mind-on-disk (`memory/overseer.py`: beliefs/journal/dossiers; pulse wakes with memory, writes back) — the session is now a cache, the disk is the mind | ☑ 9 Jun |
 | B4 | STOP-sentinel control path | legacy | deleted only when the signals surface (Phase G) is live — L8 | ⛔M |
 | B5 | Boot-revival special-cases superseded by triage | redundant | dies with B1 | ⛔M |
 | B6 | Any `*_new/_v2/_fixed/_final` files | N10 violation | scan on mount; rename-to-canonical or delete | ☑ scan clean, 9 Jun |
