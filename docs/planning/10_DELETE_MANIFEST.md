@@ -32,7 +32,7 @@ as 56404 (`restart_count` 0→1). Supervisor first is not advice; it is the obse
 | A1 | Stop both processes (§1) | — | ☑ 9 Jun ~21:50 UTC — verified dead: state mtimes frozen 3.5+ min on a ~1/min writer |
 | A2 | Stage port organs → `orchestrator-v2-planning/port/v1/` (12 modules + ledger) | — | ☑ |
 | A3 | Archive the folder (zip; exclude caches **and `ui/node_modules` — 2.0 G of the 2.1 G total**) — before any deletion; no VCS exists | A1 | ☐ operator (amended Block 3) |
-| A4 | Delete the v1 installation (operator action — it is the currently-mounted workspace; do last, after the port lands in v2) | A3 + port landed | ⛔H |
+| A4 | Delete the v1 installation (operator action) | **H5 trigger (ratified 10 Jun):** first certification recorded AND every `port/v1` organ consumed-in-code or waiver-resolved — "never rely on it again", made checkable | ⛔H until trigger |
 
 Keep-list for Estate A: nothing stays live. Knowledge survives as `port/v1/` + the planning
 corpus + regression tests (BG-7). The 2,600-test suite is not ported wholesale — its *lessons*

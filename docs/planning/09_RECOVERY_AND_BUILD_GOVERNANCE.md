@@ -105,8 +105,9 @@ serves. The Judge stays cross-provider (D4): a stronger Claude is more reason, n
 the judge outside the family. *Rejected:* ad-hoc model upgrades on release day.
 
 **DG-4 — Concurrency ratchet (portfolio-level AIMD).** 1 project until first certification;
-double only after a clean soak; any week below 80% run-success halves concurrency automatically.
-Within a project, the 1-agent cap stays law, not patch.
+double only after a clean soak (defined by DG-9, work-denominated — not days); any trailing
+window below 80% run-success halves concurrency automatically. Within a project, the 1-agent
+cap stays law, not patch.
 
 **DG-5 — Rebuild strategy: Theseus, ratified (9 Jun).** Organs replaced in place, under tests,
 inside the running system — no new repo, no parallel core. Each replacement lands as: new organ
@@ -119,7 +120,9 @@ stranger, zero mocks in the product path) **plus**: (a) intake names an **indust
 set** per project; (b) the judge's rubric scores parity-or-better against those references on
 core feature/UX axes; (c) deterministic security hygiene is clean (bandit/semgrep, dependency
 CVEs) — a product is not industry-level with injection holes; (d) performance within
-category-typical budgets. D3 (full audit + standing SLOs) is opt-in per project at intake.
+category-typical budgets. **D3 escalation (amended 10 Jun, H4): not opt-in — every project
+climbs to D3 (full security audit + standing SLOs) during its forever-improve rounds after
+soft-finish.** D2.5 is the certification bar; D3 is the standard post-certification trajectory.
 Improvement cycles continue only while each proves a measurable delta worth its tokens.
 
 **DG-7 — Deletion law, ratified (9 Jun): token-economical demolition.** Delete what is
@@ -130,6 +133,28 @@ replacement-or-archive ref); v1 is archived before any deletion (it has **no VCS
 paths are deleted only after their replacement's drill is green; provably-dead code needs only
 the archive. Projects are dispositioned case-by-case (delete / keep-and-repair / re-seed) by
 expected-cost comparison at intake re-scoping.
+
+**DG-9 — The soak bar is work-denominated, not time-denominated (ratified 10 Jun, H1).** The
+operator asked the right question: days were a lazy proxy. What a soak must actually prove is
+confidence across enough WORK and enough CYCLE DIVERSITY, so the bar is: **≥200 settled agent
+runs at ≥95% run-success, AND ≥1 overseer session succession survived cleanly, AND ≥1
+usage-window exhaustion handled without escalation, AND zero unresolved BG-5/breaker alarms.**
+Wall-clock (~2 days) is the expected envelope those cycles naturally occupy, never the
+criterion. A soak that hits the numbers without the cycles has not soaked.
+
+**DG-10 — Second slot + external notification channel (ratified 10 Jun, H2/H3/H5).**
+(a) When dubbing-studio certifies, the second project is **situation-monitor, reborn at large
+scope** (contract draft: `12_SITUATION_MONITOR_CONTRACT.md`) — multi-domain awareness (world
+news, trading, oil, currencies, geopolitics, significant decisions) through a **propaganda/bias
+estimator presenting both left- and right-lens framings**; the operator's stated intent: "I am
+not simply absorbing info, I am familiarising myself with other people's lenses." The current
+`edge` project's disposition leans cull-and-re-seed under this scope (C9.x decision at its
+intake). (b) **Telegram is a whitelisted outbound channel** (the stop-and-don't policy's first
+explicit exception): `notify()` fans out to the operator's own chat when `state/telegram.json`
+exists; desktop notify remains the fallback. (c) **v1 retirement trigger (H5):** archive zip any
+time (pure backup); folder deletion (A4) only after BOTH the first certification exists AND
+every `port/v1` organ is consumed-in-code or its waiver resolved — "never rely on it again"
+made checkable.
 
 **DG-8 — The overseer is a persistent mind whose memory lives on disk; the session is a cache
 (ratified direction, 9 Jun, after operator step-back).** The requirement is persistent context
@@ -302,6 +327,16 @@ hardening; the next milestone is a certified flagship product with the **daemon*
 work, not hand-executed phases. DG-8 added: overseer as a persistent mind on disk (session =
 cache), extending `memory/overseer.py`. Flagship default: dubbing-studio, by the
 60-second-stranger-demo criterion.
+
+**v1.4, 10 June (operator answers H1–H5, first-flight day):** DG-9 — soak bar redefined
+work-denominated (≥200 runs at ≥95% + cycle diversity; days demoted to envelope) after the
+operator correctly challenged the time proxy. DG-6 amended — D3 is every project's
+post-soft-finish trajectory, not opt-in. DG-10 — second slot = situation-monitor at large scope
+(dual-lens propaganda estimator; contract draft in 12); Telegram whitelisted as the first
+stop-and-don't exception (notify fan-out, config-gated, operator's own chat only); v1 deletion
+trigger made checkable (first certification + port ledger consumed). Overseer promoted to
+Fable 5 (registry, DG-3). First flight: boot self-test passed on the host; the overseer's first
+pulse read the world and reprioritised the re-scope contract on its own authority.
 
 **Conscious cost, accepted deliberately:** this regime front-loads roughly two weeks of
 infrastructure before a single certified product, and the demo gradient will fight it daily.
