@@ -224,3 +224,22 @@ def test_improve_loop_continues_then_stops_when_maxed(tmp_path: Path):
     again = [t for t in repo.list() if t.task_type == "plan"
              and isinstance(t.payload, dict) and t.payload.get("mode") == "improve"]
     assert len(again) == 1   # no new improve round — planner found nothing more, so the loop halts
+
+
+# ---- a re-scope opens a fresh planning era (the 11 Jun inherited-exhaustion stall) ----
+
+def test_rescope_resets_plan_and_oversee_budgets(tmp_path: Path):
+    from control.daemon import _era_counts
+    repo = TaskRepository(EventStore(tmp_path / "e.log"))
+    for i in range(25):   # the dead predecessor goal burnt its whole planner
+        repo.create(Task(task_id=f"old{i}", title="old plan", task_type="plan", project="demo"))
+    repo.create(Task(task_id="ov_old", title="old intervention", task_type="oversee", project="demo"))
+    plans, oversees = _era_counts(repo, "demo")
+    assert plans == 25 and oversees == 1, "no re-scope yet: lifetime counts apply"
+    repo.create(Task(task_id="contract", title="re-scope (D2.5)", task_type="plan",
+                     project="demo", payload={"mode": "rescope"}))
+    repo.create(Task(task_id="p1", title="next increment", task_type="plan", project="demo"))
+    repo.create(Task(task_id="ov1", title="intervention", task_type="oversee", project="demo"))
+    plans, oversees = _era_counts(repo, "demo")
+    assert plans == 2, "the era starts at the contract: rescope + 1, not 27"
+    assert oversees == 1, "old-era interventions don't count against the new contract"

@@ -101,6 +101,23 @@ def _planner_done(repo: TaskRepository, project: str) -> bool:
     return not any(t.task_type in ("implement", "validate") for t in proj[idx + 1:])
 
 
+def _era_counts(repo: TaskRepository, project: str) -> tuple[int, int]:
+    """(plan_count, oversee_count) for the CURRENT contract era. A re-scope plan (payload
+    mode == 'rescope') opens a fresh era and budgets count from it, inclusive. Without this, a
+    re-scoped project inherits its dead predecessor's spent planner — the 11 Jun stall read
+    '20/20 iterations' of which most belonged to the abandoned June-era goal, and every future
+    C9.x re-scope would arrive pre-exhausted and head straight for abandonment."""
+    proj = [t for t in repo.list() if t.project == project]
+    start = 0
+    for i, t in enumerate(proj):
+        if (t.task_type == "plan" and isinstance(t.payload, dict)
+                and t.payload.get("mode") == "rescope"):
+            start = i
+    era = proj[start:]
+    return (sum(1 for t in era if t.task_type == "plan"),
+            sum(1 for t in era if t.task_type == "oversee"))
+
+
 def _project_state(repo: TaskRepository, project: str, root: Path) -> dict:
     """The current state the planner reasons over: goal, acceptance, done steps, failures+causes, files."""
     proj = [t for t in repo.list() if t.project == project]
@@ -127,7 +144,7 @@ def _advance_stalled(repo: TaskRepository, project: str, root: Path, *, reason: 
     by MAX_OVERSEER_INTERVENTIONS), and only once the overseer is also exhausted escalate to the user.
     Single source of truth for 'a project that can't finish itself' — used by both the gates-unmet and
     the failed-assurance paths so a sub-par project is never pinged as done."""
-    oversee_passes = sum(1 for t in repo.list() if t.project == project and t.task_type == "oversee")
+    _, oversee_passes = _era_counts(repo, project)   # interventions are budgeted per ERA
     st = _project_state(repo, project, root)
     if oversee_passes < MAX_OVERSEER_INTERVENTIONS:
         instruction = (
@@ -207,7 +224,7 @@ def monitor_projects(
         # Deterministic gates unmet — advance the project, escalating only as the LAST resort:
         #   1. planner still has moves -> replan (next increment)
         #   2. planner spent           -> overseer fixes, then (if exhausted) escalate
-        plan_passes = sum(1 for t in repo.list() if t.project == project and t.task_type == "plan")
+        plan_passes, _ = _era_counts(repo, project)   # the planner's budget belongs to the era
         planner_spent = plan_passes >= MAX_PLAN_ITERATIONS or _planner_done(repo, project)
         if not planner_spent:
             st = _project_state(repo, project, root)
