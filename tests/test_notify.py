@@ -44,7 +44,7 @@ def test_send_telegram_posts_to_operator_chat():
         seen["body"] = req.data.decode()
         return _Resp()
 
-    ok = _send_telegram("Orchestrator", "certified!", {"token": "123:abc", "chat_id": "42"},
+    ok = _send_telegram("Orchestrator: certified!", {"token": "123:abc", "chat_id": "42"},
                         opener=opener)
     assert ok
     assert "bot123:abc/sendMessage" in seen["url"]
@@ -55,4 +55,39 @@ def test_send_telegram_never_raises():
     def boom(req, timeout):
         raise OSError("network down")
 
-    assert _send_telegram("t", "m", {"token": "x", "chat_id": "1"}, opener=boom) is False
+    assert _send_telegram("boom", {"token": "x", "chat_id": "1"}, opener=boom) is False
+
+
+def test_plainify_rewrites_for_the_phone():
+    from infra.notify import _plainify
+
+    def translator(prompt):
+        assert "BG-5: guardian unhealthy" in prompt, "original message reaches the translator"
+        return "Your robot manager stopped answering twice in a row - the system flagged it."
+
+    out = _plainify("Overseer", "BG-5: guardian unhealthy — 2 pulse(s) outstanding",
+                    translator=translator)
+    assert out.startswith("Your robot manager")
+
+
+def test_plainify_falls_back_on_any_failure():
+    from infra.notify import _plainify
+
+    def boom(prompt):
+        raise RuntimeError("translator down")
+
+    assert _plainify("T", "technical detail", translator=boom) == "T: technical detail"
+
+    def empty(prompt):
+        return "   "
+
+    assert _plainify("T", "technical detail", translator=empty) == "T: technical detail"
+
+
+def test_plain_mode_is_switchable(monkeypatch):
+    from infra.notify import _plain_enabled
+    monkeypatch.delenv("AGENTIC_NOTIFY_PLAIN", raising=False)
+    assert _plain_enabled({}) is True, "plain speech is the default"
+    assert _plain_enabled({"plain": False}) is False
+    monkeypatch.setenv("AGENTIC_NOTIFY_PLAIN", "0")
+    assert _plain_enabled({}) is False

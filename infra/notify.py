@@ -10,6 +10,7 @@ log stays the single source of truth, and nothing in the system depends on one a
 from __future__ import annotations
 
 import json
+import os
 import platform
 import shutil
 import subprocess
@@ -19,6 +20,40 @@ from pathlib import Path
 
 CONFIG_PATH = Path(__file__).resolve().parents[1] / "state" / "telegram.json"
 _TG_TIMEOUT = 5
+
+# Plain-speech mode (operator request, 11 Jun): phone messages are rewritten for a non-engineer
+# before sending — the event log keeps the technical truth; the phone gets the human version.
+# Disable with AGENTIC_NOTIFY_PLAIN=0 or {"plain": false} in telegram.json.
+_PLAIN_PROMPT = (
+    "You translate terse status messages from an autonomous software factory into plain speech "
+    "for its owner's phone. Rewrite the message below so a non-engineer mate instantly gets "
+    "what happened and whether anything is needed from him. Rules: at most 3 short sentences; "
+    "keep exact numbers, names and times; no jargon or acronyms — say it in everyday words; "
+    "lead with the practical meaning; if it's good news say so plainly; if something needs the "
+    "owner, say exactly what. Output ONLY the rewritten message.\n\nMessage: "
+)
+
+
+def _plain_enabled(cfg: dict) -> bool:
+    if os.environ.get("AGENTIC_NOTIFY_PLAIN", "") in ("0", "false", "no"):
+        return False
+    return bool(cfg.get("plain", True))
+
+
+def _plainify(title: str, message: str, translator=None) -> str:
+    """Best-effort plain-speech rewrite. NEVER raises and NEVER goes silent: any failure,
+    empty output, or slow call falls back to the original technical message."""
+    original = f"{title}: {message}"
+    try:
+        if translator is None:
+            from infra.llm import call_llm
+
+            def translator(prompt: str) -> str:
+                return call_llm("claude", "haiku", prompt, timeout=30).text
+        out = (translator(_PLAIN_PROMPT + original) or "").strip()
+        return out[:1000] if out else original
+    except Exception:
+        return original
 
 
 def _desktop(title: str, message: str) -> bool:
@@ -47,11 +82,11 @@ def _telegram_config(path: Path | None = None) -> dict | None:
     return None
 
 
-def _send_telegram(title: str, message: str, cfg: dict, opener=None) -> bool:
+def _send_telegram(text: str, cfg: dict, opener=None) -> bool:
     """POST to the operator's own chat. Injectable opener for tests; never raises."""
     try:
         data = urllib.parse.urlencode(
-            {"chat_id": cfg["chat_id"], "text": f"{title}: {message}"[:4000]}
+            {"chat_id": cfg["chat_id"], "text": text[:4000]}
         ).encode()
         req = urllib.request.Request(
             f"https://api.telegram.org/bot{cfg['token']}/sendMessage", data=data)
@@ -63,9 +98,11 @@ def _send_telegram(title: str, message: str, cfg: dict, opener=None) -> bool:
 
 
 def notify(title: str, message: str) -> bool:
-    """Fan out to every available channel. Returns True if ANY dispatched. Never raises."""
+    """Fan out to every available channel. Returns True if ANY dispatched. Never raises.
+    Desktop gets the technical message; the phone gets the plain-speech rewrite."""
     sent = _desktop(title, message)
     cfg = _telegram_config()
     if cfg:
-        sent = _send_telegram(title, message, cfg) or sent
+        text = _plainify(title, message) if _plain_enabled(cfg) else f"{title}: {message}"
+        sent = _send_telegram(text, cfg) or sent
     return sent
