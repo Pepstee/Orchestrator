@@ -158,3 +158,15 @@ def test_resume_failure_falls_back_to_fresh_session(monkeypatch):
     fresh = run.calls[1][run.calls[1].index("--session-id") + 1]
     assert str(uuid.UUID(fresh)) == fresh   # a canonical dashed UUID
     assert r.session_id == fresh
+
+
+def test_default_timeout_is_env_tunable(monkeypatch):
+    from infra.llm import _default_timeout
+    monkeypatch.delenv("AGENTIC_LLM_TIMEOUT", raising=False)
+    assert _default_timeout() == 1500
+    monkeypatch.setenv("AGENTIC_LLM_TIMEOUT", "2400")
+    assert _default_timeout() == 2400
+    monkeypatch.setenv("AGENTIC_LLM_TIMEOUT", "5")
+    assert _default_timeout() == 60, "floor prevents an absurdly small timeout"
+    monkeypatch.setenv("AGENTIC_LLM_TIMEOUT", "nonsense")
+    assert _default_timeout() == 1500

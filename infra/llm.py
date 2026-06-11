@@ -8,9 +8,19 @@ Judge slice) — never ship an unverified parser as if it works (probe-before-yo
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import uuid
 from dataclasses import dataclass
+
+
+def _default_timeout() -> int:
+    """Agent-call wall clock. 600s proved too tight in the field (11 Jun: consolidation-scale
+    work timed out on a 10-minute metronome all night). Env-tunable without a code change."""
+    try:
+        return max(60, int(os.environ.get("AGENTIC_LLM_TIMEOUT", "1500")))
+    except ValueError:
+        return 1500
 
 # Classification is the triage module's job (one taxonomy, L1). Names re-exported here because
 # the dispatcher/repository historically import them from infra.llm.
@@ -123,7 +133,7 @@ def call_llm(
     *,
     system: str | None = None,
     cwd: str | None = None,
-    timeout: int = 600,
+    timeout: int | None = None,
     session_id: str | None = None,
     resume: bool = False,
 ) -> LLMResult:
@@ -131,6 +141,7 @@ def call_llm(
     caller-owned ``session_id``: ``resume=False`` CREATES that session, ``resume=True`` CONTINUES it
     with the full prior context. Only the Claude path supports sessions; other providers ignore the
     args and run stateless (the abstraction degrades gracefully)."""
+    timeout = timeout if timeout is not None else _default_timeout()
     if provider == "claude":
         full = f"{system}\n\n{prompt}" if system else prompt
         base = ["claude", "-p", "--output-format", "json", "--model", model]
