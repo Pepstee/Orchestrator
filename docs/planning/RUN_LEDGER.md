@@ -51,6 +51,7 @@ gates — both poles calibrated; we did not trade false-green for false-red.
 | Malformed session UUID | canonical-UUID guard (pre-existing, `memory/overseer.py::_is_canonical_uuid`) |
 | Repeat-alert spam (5,384×, v1) | once-per-episode alarms (`test_pulse_health_alarms_on_wedge_once_and_clears`); LOC guardrail descoped from archives |
 | Supervisor resurrection on partial kill | manifest §1 procedure (drill: observed live, 9 Jun — child 45637 → respawned 56404) |
+| **11 Jun overnight integration wedge:** all 8 project repos unmergeable — legacy baselines tracked `__pycache__` artefacts which gate-runs dirty in the MAIN tree, plus crash residue (`AUTO_MERGE`); every worktree integration failed deterministically and finished work was discarded at merge (incl. the overseer's completed 227-tests consolidation). Overseer diagnosed it precisely (pulse 10) but cannot touch main-tree git state from its worktree. Night totals: 21 ok / 71 fail; burn breaker tripped 3× (worked); PA terminally killed the old conflict looper (`pa:escalate`) | `heal_repo()` now runs before EVERY integration (abort stale merge, untrack artefacts, snapshot strays — preserved, never discarded) + artefact `.gitignore` at baseline; `test_integration_heals_a_wedged_main_tree`; live repos healed by hand 07:30 UTC, 11 Jun. Incident → executable lesson in under 30 minutes (BG-7) |
 
 ## 4. Open / pending
 
