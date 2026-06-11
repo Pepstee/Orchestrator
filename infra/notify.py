@@ -99,7 +99,13 @@ def _send_telegram(text: str, cfg: dict, opener=None) -> bool:
 
 def notify(title: str, message: str) -> bool:
     """Fan out to every available channel. Returns True if ANY dispatched. Never raises.
-    Desktop gets the technical message; the phone gets the plain-speech rewrite."""
+    Desktop gets the technical message; the phone gets the plain-speech rewrite.
+
+    MUTED under pytest (PYTEST_CURRENT_TEST) and via AGENTIC_NOTIFY_MUTE: the boot self-test
+    runs the law-linked suite at every launch, and on 11 Jun its fixture universe ('demo is
+    DONE') leaked to the operator's actual phone — tests must never ring a production bell."""
+    if os.environ.get("PYTEST_CURRENT_TEST") or os.environ.get("AGENTIC_NOTIFY_MUTE"):
+        return False
     sent = _desktop(title, message)
     cfg = _telegram_config()
     if cfg:

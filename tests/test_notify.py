@@ -91,3 +91,13 @@ def test_plain_mode_is_switchable(monkeypatch):
     assert _plain_enabled({"plain": False}) is False
     monkeypatch.setenv("AGENTIC_NOTIFY_PLAIN", "0")
     assert _plain_enabled({}) is False
+
+
+def test_notify_is_mute_under_pytest(monkeypatch):
+    # PYTEST_CURRENT_TEST is set right now, by definition — notify must refuse to ring.
+    import infra.notify as n
+    calls = []
+    monkeypatch.setattr(n, "_desktop", lambda t, m: calls.append("desktop") or True)
+    monkeypatch.setattr(n, "_telegram_config", lambda: {"token": "x", "chat_id": "1"})
+    assert n.notify("Orchestrator", "demo is DONE") is False
+    assert not calls, "no channel may fire from inside a test run (the 11 Jun phone leak)"
