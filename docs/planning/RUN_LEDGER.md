@@ -61,3 +61,4 @@ gates — both poles calibrated; we did not trade false-green for false-red.
 | edge rename repair (C7), writing-assistant recursion (C8) | flagship/re-scope pipeline | Phase E/F |
 | C9.x project dispositions | intake re-scoping | per project |
 | v1 estate archive + delete (A3/A4) | operator | when convenient |
+| Directive race (overseer pulse 3, 11 Jun): same-pulse `abandon` + `enqueue` processed together — the abandon swept the overseer's own fresh recovery plan (seq 5712). Ordering/atomicity fix needed in `process_overseer_control` | next hardening slice | before breadth widens |
