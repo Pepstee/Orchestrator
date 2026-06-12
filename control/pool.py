@@ -22,8 +22,15 @@ from control.loop import RATE_LIMIT_BACKOFF_SECONDS
 from core.models import AgentResult, Task
 from dispatch.dispatcher import Invoke, PAConsult, is_rate_limited, settle
 from dispatch.repository import TaskRepository
+from infra.notify import notify
 from infra.workspace import default_projects_root, resolve_project_dir
-from infra.worktree import create_worktree, head_rev, integrate_worktree, remove_worktree
+from infra.worktree import (
+    create_worktree,
+    head_rev,
+    integrate_worktree,
+    remove_worktree,
+    selfmod_fence,
+)
 
 DEFAULT_MAX_WORKERS = 8
 # Task types that edit a project tree -> run in an isolated worktree. Reserved (__) projects (the
@@ -52,6 +59,14 @@ def _settle_one(fut, repo: TaskRepository, task: Task, pa_consult: PAConsult | N
                                        " (a concurrent task changed the same lines)",
                                  metadata=result.metadata)
         remove_worktree(proj, task.task_id)
+    tamper = selfmod_fence()   # L9R: the examined never edit the examiner (12 Jun incident)
+    if tamper:
+        result = AgentResult(
+            ok=False, summary="modified orchestrator source — quarantined and reverted (L9R)",
+            cause=f"L9R fence: agent write to orchestrator tree: {tamper}",
+            metadata=result.metadata)
+        notify("Orchestrator", f"an agent tried to modify the orchestrator's own code "
+                               f"({tamper[:120]}) — reverted, quarantined, task failed")
     repo.record_result(task.task_id, result)
     governor.charge(float(result.metadata.get("cost_usd", 0.0)))
     governor.record_outcome(result.ok)   # burn-rate breaker input (one signal per settled run)

@@ -49,6 +49,10 @@ LAWS: list[Law] = [
         "mock paths are refused, every criterion runs (no default-pass gates under zero-touch)",
         "active",
         "tests/test_acceptance_exec.py"),
+    Law("L9R", "Runtime self-modification fence — an agent write to the orchestrator's own "
+        "tree is quarantined, reverted, and fails the task (the examined never edit the "
+        "examiner; gate changes are operator-only)", "active",
+        "tests/test_selfmod_fence.py"),
 
     # Deferred — subsystem not built yet; check planned (gap kept explicit and traceable).
     Law("L4", "Deliverable purity (project tree isolated; no orchestrator scratch)", "active",

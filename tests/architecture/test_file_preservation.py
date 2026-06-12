@@ -5,10 +5,14 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-SKIP = {".venv", "__pycache__", ".git", "projects", ".ruff_cache", ".pytest_cache", "tests", "docs"}
+SKIP = {".venv", "__pycache__", ".git", "projects", ".ruff_cache", ".pytest_cache", "tests", "docs",
+        "state"}
 # docs/ added 9 Jun 2026: staged v1 port organs (docs/planning/port/) are non-importable donor
 # material, not runtime source — L7's intent is that no RUNTIME path raw-writes. Each organ is
 # reworked through atomic_io as it is ported into a live layer (PORT_LEDGER.md).
+# state/ added 12 Jun 2026: runtime artefacts, never source — the L9R fence quarantines forensic
+# COPIES of agent files there (state/quarantine/), and a copy of a test legitimately using raw
+# writes must not fail the gate (the LOC-guardrail archive-scan pathology in miniature).
 ALLOWED = {"infra/atomic_io.py"}  # the sanctioned writer/deleter
 
 FORBIDDEN = [

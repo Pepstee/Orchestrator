@@ -12,7 +12,9 @@ fails). Git owns the tree, so there are no raw file writes/deletes here — law 
 """
 from __future__ import annotations
 
+import os
 import subprocess
+import time
 from pathlib import Path
 
 from infra.atomic_io import remove, write_text_atomic
@@ -98,6 +100,56 @@ def integrate_worktree(project_dir: Path, task_id: str) -> bool:
         _git(project_dir, "merge", "--abort")
         return False
     return True
+
+
+ORCHESTRATOR_ROOT = Path(__file__).resolve().parents[1]
+# Runtime/state paths the fence never polices (gitignored anyway; listed as a belt).
+_FENCE_SKIP = ("state/", "projects", ".worktrees", "supervisor.log")
+
+
+def selfmod_fence(root: Path | None = None, quarantine: Path | None = None) -> str:
+    """L9R — the runtime self-modification fence. 12 Jun incident: a builder, blocked by the
+    mutation gate, edited `validation/mutation.py` to narrow what the gate examines — a
+    technically sound refinement and an institutionally forbidden act (the examined never edit
+    the examiner; gate changes are operator-only). Detect any write to the orchestrator's OWN
+    tree, save a forensic patch + move stray new files into quarantine, restore the tree, and
+    return a short description ('' = clean). The caller fails the offending task PERMANENTLY.
+
+    Operator caveat (documented trade-off): uncommitted OPERATOR edits look identical to agent
+    edits at settle time — commit your work before the next settle, or the fence quarantines it
+    (recoverable from the patch; nothing is ever destroyed)."""
+    if root is None and os.environ.get("PYTEST_CURRENT_TEST"):
+        return ""  # hermetic suites: the fence polices the RUNTIME tree only — a dirty dev tree
+        # must not fail unrelated tests, and a test run must NEVER checkout the dev's work
+        # (12 Jun: the suite quarantined the fence's own uncommitted implementation).
+        # Same doctrine as the notify hard-mute under pytest. Fence tests pass root explicitly.
+    root = root or ORCHESTRATOR_ROOT
+    if not (root / ".git").exists():
+        return ""
+    lines = [ln for ln in _git(root, "status", "--porcelain").stdout.splitlines() if ln.strip()]
+    offences: list[tuple[str, str]] = []
+    for ln in lines:
+        status, path = ln[:2], ln[3:].strip()
+        if any(path.startswith(s) for s in _FENCE_SKIP):
+            continue
+        offences.append((status, path))
+    if not offences:
+        return ""
+    qdir = quarantine or (root / "state" / "quarantine")
+    ts = int(time.time())
+    diff = _git(root, "diff").stdout
+    if diff:
+        write_text_atomic(qdir / f"selfmod_{ts}.patch", diff)
+    for status, path in offences:
+        if status.strip() == "??":                     # a NEW file planted in the source tree
+            p = root / path
+            try:
+                write_text_atomic(qdir / f"selfmod_{ts}_{p.name}", p.read_text(encoding="utf-8"))
+            except OSError:
+                pass
+            remove(p)
+    _git(root, "checkout", "--", ".")
+    return "; ".join(f"{(s.strip() or 'M')} {p}" for s, p in offences[:6])
 
 
 def head_rev(project_dir: Path) -> str:
