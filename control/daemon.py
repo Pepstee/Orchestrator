@@ -205,6 +205,9 @@ def monitor_projects(
                                   reason=assurance.stopped_reason)
             if assurance.fully_hardened:
                 repo.record_confirmation(project)   # certified at scope — shippable now, no human gate
+                notify("Orchestrator",
+                       f"{project} is CERTIFIED — all four gates passed AND the hardening ladder "
+                       "came back clean. First-class, shippable work. Improvement rounds continue.")
                 # FOREVER-IMPROVE: don't stop at 'good enough'. As long as the last round actually
                 # produced integrated work, open another improvement round (security, tests, UX, perf,
                 # GUI, cleaner code, better features...). It stops on its own only when a round finds
