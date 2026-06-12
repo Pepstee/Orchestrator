@@ -24,6 +24,7 @@ from control.breadth import breadth_allowance, read_flagship
 from control.budget import BudgetGovernor
 from control.confirm import ingest_confirmations
 from control.inbox import ingest
+from control.operator_chat import poll_operator_messages
 from control.pool import DEFAULT_MAX_WORKERS, run_concurrent
 from control.project import DEFAULT_TEST_COMMAND, ProjectOutcome, evaluate_project
 from control.self_test import run_boot_self_test
@@ -260,7 +261,9 @@ def overseer_pulse_health(repo: TaskRepository, meta: dict, notifier: Callable =
     oversee = [t for t in repo.list()
                if t.project == OVERSEER_PROJECT and t.task_type == "oversee"]
     pending = sum(1 for t in oversee
-                  if t.status in (TaskStatus.QUEUED, TaskStatus.IN_PROGRESS))
+                  if t.status in (TaskStatus.QUEUED, TaskStatus.IN_PROGRESS)
+                  and (t.payload.get("mode") if isinstance(t.payload, dict) else None)
+                  != "operator_message")   # a queued operator chat is conversation, not a wedge
     terminal = [t for t in oversee if t.status in (TaskStatus.DONE, TaskStatus.FAILED)]
     failed_streak = len(terminal) >= 2 and all(
         t.status == TaskStatus.FAILED for t in terminal[-2:])
@@ -484,6 +487,8 @@ def main() -> None:
         ingest_confirmations(repo)   # apply any user confirmations (the fourth gate)
         monitor_projects(repo, evaluated, governor=governor, should_stop=should_stop)
         tick_overseer_session(repo, session_path, handoff_path, overseer_meta)  # the meta-agent's heartbeat
+        poll_operator_messages(repo, session_path, overseer_meta,   # the operator's return path
+                               project=OVERSEER_PROJECT, context_fn=lambda: _status_summary(repo))
         process_overseer_control(repo)   # execute the overseer's abandon directives
         rules = load_rules(pa_path)  # overseer evolves the PA from recurring failures (curated)
         evolve_pa(rules, repo.failure_causes())

@@ -72,6 +72,20 @@ OBSERVE_SYSTEM = (
 # Bound how much new work one observation may start (law L6: bounded autonomy).
 MAX_OVERSEER_ENQUEUES = 5
 
+OPERATOR_CHAT_SYSTEM = (
+    "You are the persistent Overseer meta-agent — and right now the OPERATOR is speaking to you "
+    "directly over the phone link. Answer HIM, not your journal: plain, direct, his question first. "
+    "You are the most informed surface of this system — earn it: ground what you assert in evidence "
+    "(task ids, seq numbers, gate names, file paths), and read what you need before answering — a "
+    "direct question justifies deeper archaeology than a pulse (up to ~6 quick reads; your call still "
+    "dies at 600s, so stay sharp). If he asks for action, use your normal bounded directives. Your "
+    "limits are unchanged: you NEVER target the orchestrator itself, and what your charter forbids "
+    "you say so plainly — code fixes are for him or a dev session, not you. End with ONE JSON "
+    'object: {"reply": "<your message back to the operator — short, plain, concrete>", '
+    '"journal": "<1-3 sentences to your future self>", "enqueue": [...], "abandon": [...], '
+    '"reprioritise": [...]} — reply and journal are REQUIRED; directive lists may be empty.'
+)
+
 SUCCESSION_SYSTEM = (
     "You are the persistent Overseer meta-agent. Your session memory is about to be WIPED and a fresh "
     "session will take over. Follow the handoff instructions exactly, then separately propose an "
@@ -254,6 +268,53 @@ def _run_observe(task: Task, call: LLMCall, mind: Path | None = None) -> AgentRe
                                  "beliefs_updated": bool(beliefs_update)})
 
 
+def _run_operator_message(task: Task, call: LLMCall, mind: Path | None = None,
+                          notifier: Callable = notify) -> AgentResult:
+    """The operator spoke (over the Telegram return path); answer in the SAME persistent session.
+    The conversation is part of the mind: question and reply are journaled, so future pulses —
+    and future incarnations — remember what the operator asked for."""
+    mind = mind or default_mind_dir()
+    p = task.payload if isinstance(task.payload, dict) else {}
+    message = str(p.get("message", "")).strip()
+    context = str(p.get("context", ""))
+    spec = model_for("overseer")
+    recollection = mind_context(mind)
+    prompt = (
+        (f"YOUR DURABLE MIND (written by you, for you — your canonical memory):\n{recollection}\n\n"
+         if recollection else "")
+        + (f"Current system state:\n{context}\n\n" if context else "")
+        + f"THE OPERATOR SAYS:\n{message}\n\n"
+          "Answer him now (read first if you need evidence), then end with the single JSON object "
+          "(reply and journal required)."
+    )
+    try:
+        res = call(spec["provider"], spec["model"], prompt,
+                   system=frame_system(OPERATOR_CHAT_SYSTEM), **_session_args(task))
+    except Exception as exc:
+        # He is waiting on a reply that will never come — say so, and leave the trace.
+        append_journal(mind, {"mode": "operator_message",
+                              "note": f"reply failed: {type(exc).__name__}: {exc}"[:500]})
+        notifier("Overseer", "your message reached me but my reply call failed — "
+                             "the journal has the trace; ask again in a minute", verbatim=True)
+        return AgentResult(ok=False, summary="overseer reply failed",
+                           cause=f"{type(exc).__name__}: {exc}")
+    data = _extract_json_object(res.text)
+    fallback = res.text.strip().splitlines()[0][:400] if res.text.strip() else "…(empty reply)"
+    reply = str(data.get("reply") or "").strip() or fallback
+    spawned = (_enqueue_directives(res.text) + _abandon_directives(res.text)
+               + _reprioritise_directives(res.text))
+    note = str(data.get("journal") or "").strip() or f"replied: {reply[:200]}"
+    append_journal(mind, {"mode": "operator_message",
+                          "note": f"operator said: {message[:200]} | {note}"[:1500],
+                          "directed": len(spawned), "session": res.session_id})
+    notifier("Overseer", reply[:1500], verbatim=True)   # his own words, not the haiku rewrite
+    return AgentResult(ok=True,
+                       summary=(f"replied to operator: {reply[:120]}"
+                                + (f"; directed {len(spawned)} action(s)" if spawned else ""))[:200],
+                       spawned_tasks=spawned,
+                       metadata={"cost_usd": res.cost_usd, "session_id": res.session_id})
+
+
 def _run_succession(task: Task, call: LLMCall, state_root: Path,
                     mind: Path | None = None) -> AgentResult:
     context = str(task.payload.get("context", "")) if isinstance(task.payload, dict) else ""
@@ -302,6 +363,8 @@ def run(payload: dict, call: LLMCall = call_llm, projects_root: str | None = Non
         return _run_succession(task, call, root, mind)
     if mode == "observe":
         return _run_observe(task, call, mind)
+    if mode == "operator_message":
+        return _run_operator_message(task, call, mind)
     return _run_intervene(task, call, projects_root, mind)
 
 

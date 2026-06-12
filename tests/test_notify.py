@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from infra.notify import _send_telegram, _telegram_config, notify
+from infra.notify import _send_telegram, notify, telegram_config
 
 
 def test_notify_never_raises_and_returns_bool():
@@ -12,18 +12,24 @@ def test_notify_never_raises_and_returns_bool():
     assert isinstance(result, bool)
 
 
+def test_notify_verbatim_is_accepted_and_muted_under_pytest():
+    # The verbatim path (operator-chat replies — the overseer's own words, no haiku rewrite)
+    # must exist and obey the same hard mute: tests never ring a production bell.
+    assert notify("Overseer", "exact words", verbatim=True) is False
+
+
 def test_no_or_bad_config_means_no_telegram(tmp_path):
-    assert _telegram_config(tmp_path / "telegram.json") is None
+    assert telegram_config(tmp_path / "telegram.json") is None
     (tmp_path / "telegram.json").write_text("{not json", encoding="utf-8")
-    assert _telegram_config(tmp_path / "telegram.json") is None
+    assert telegram_config(tmp_path / "telegram.json") is None
     (tmp_path / "telegram.json").write_text(json.dumps({"token": "t"}), encoding="utf-8")
-    assert _telegram_config(tmp_path / "telegram.json") is None, "chat_id required"
+    assert telegram_config(tmp_path / "telegram.json") is None, "chat_id required"
 
 
 def test_valid_config_loads(tmp_path):
     (tmp_path / "telegram.json").write_text(
         json.dumps({"token": "123:abc", "chat_id": "42"}), encoding="utf-8")
-    assert _telegram_config(tmp_path / "telegram.json") == {"token": "123:abc", "chat_id": "42"}
+    assert telegram_config(tmp_path / "telegram.json") == {"token": "123:abc", "chat_id": "42"}
 
 
 class _Resp:
@@ -98,6 +104,6 @@ def test_notify_is_mute_under_pytest(monkeypatch):
     import infra.notify as n
     calls = []
     monkeypatch.setattr(n, "_desktop", lambda t, m: calls.append("desktop") or True)
-    monkeypatch.setattr(n, "_telegram_config", lambda: {"token": "x", "chat_id": "1"})
+    monkeypatch.setattr(n, "telegram_config", lambda: {"token": "x", "chat_id": "1"})
     assert n.notify("Orchestrator", "demo is DONE") is False
     assert not calls, "no channel may fire from inside a test run (the 11 Jun phone leak)"

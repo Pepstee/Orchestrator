@@ -71,7 +71,7 @@ def _desktop(title: str, message: str) -> bool:
     return False
 
 
-def _telegram_config(path: Path | None = None) -> dict | None:
+def telegram_config(path: Path | None = None) -> dict | None:
     p = path or CONFIG_PATH
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
@@ -97,9 +97,12 @@ def _send_telegram(text: str, cfg: dict, opener=None) -> bool:
         return False
 
 
-def notify(title: str, message: str) -> bool:
+def notify(title: str, message: str, *, verbatim: bool = False) -> bool:
     """Fan out to every available channel. Returns True if ANY dispatched. Never raises.
-    Desktop gets the technical message; the phone gets the plain-speech rewrite.
+    Desktop gets the technical message; the phone gets the plain-speech rewrite — unless
+    ``verbatim=True``, which sends the message word-for-word (a direct CONVERSATION must be
+    the speaker's own voice; the haiku rewrite is for alerts, not for dialogue — 12 Jun,
+    operator chat).
 
     MUTED under pytest (PYTEST_CURRENT_TEST) and via AGENTIC_NOTIFY_MUTE: the boot self-test
     runs the law-linked suite at every launch, and on 11 Jun its fixture universe ('demo is
@@ -107,8 +110,9 @@ def notify(title: str, message: str) -> bool:
     if os.environ.get("PYTEST_CURRENT_TEST") or os.environ.get("AGENTIC_NOTIFY_MUTE"):
         return False
     sent = _desktop(title, message)
-    cfg = _telegram_config()
+    cfg = telegram_config()
     if cfg:
-        text = _plainify(title, message) if _plain_enabled(cfg) else f"{title}: {message}"
+        text = (f"{title}: {message}" if verbatim or not _plain_enabled(cfg)
+                else _plainify(title, message))
         sent = _send_telegram(text, cfg) or sent
     return sent
