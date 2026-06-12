@@ -39,10 +39,15 @@ AGENT_COMMANDS: dict[str, list[str]] = {
 #   Judge runs on a DIFFERENT PROVIDER from the Builder (true independence, finding F5).
 AGENT_MODELS: dict[str, dict[str, str]] = {
     # role          provider    model tier        notes
-    "task_manager": {"provider": "claude", "model": "sonnet"},   # ->opus for complex goals
+    # Local-first doctrine (operator decision, 12 Jun 2026): text-only roles run on the house
+    # GPU at zero marginal cost. Roles that EDIT FILES (builder, tester) need a tool-capable
+    # provider, and the persistent overseer needs sessions — both machine-checked in
+    # tests/test_llm_ollama.py. Judge-on-local keeps F5 cross-provider independence alive
+    # while codex is capped; AGENTIC_JUDGE=openai:codex restores codex when limits reset.
+    "task_manager": {"provider": "ollama", "model": "qwen2.5-coder:7b"},
     "builder":      {"provider": "claude", "model": "sonnet"},   # cascades local->sonnet->opus by difficulty
     "tester":       {"provider": "claude", "model": "sonnet"},   # independent test-author (mutation gate backs it)
-    "judge":        {"provider": "openai", "model": "codex"},    # cross-provider independence (F5)
+    "judge":        {"provider": "ollama", "model": "qwen2.5-coder:7b"},
     # Overseer promoted Opus 4.8 -> Fable 5 (operator decision, 9 Jun 2026; DG-3: strongest model
     # to the highest-stakes judgement role first). Metric to watch per DG-3: retries-per-completion
     # and tokens-per-certified-criterion — the premium must pay for itself in fewer attempts.

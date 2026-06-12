@@ -12,6 +12,8 @@ import os
 import subprocess
 import uuid
 from dataclasses import dataclass
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
 
 def _default_timeout() -> int:
@@ -126,6 +128,24 @@ def _parse_codex_output(stdout: str) -> LLMResult:
     return LLMResult(text=text, cost_usd=0.0, model="codex")
 
 
+def _ollama_host() -> str:
+    """Local inference endpoint. Honours OLLAMA_HOST (the server's own convention) so the
+    orchestrator and the service always agree; loopback by default — never the open internet."""
+    host = (os.environ.get("OLLAMA_HOST") or "127.0.0.1:11434").strip().rstrip("/")
+    if not host.startswith(("http://", "https://")):
+        host = "http://" + host
+    return host
+
+
+def _parse_ollama_output(stdout: str) -> LLMResult:
+    """Parse `POST /api/chat` (stream=false): {"model": ..., "message": {"content": ...}}.
+    Cost is 0.0 by construction: the house GPU has no marginal price."""
+    data = json.loads(stdout)
+    msg = data.get("message") or {}
+    return LLMResult(text=str(msg.get("content", "") or ""), cost_usd=0.0,
+                     model=str(data.get("model", "") or ""))
+
+
 def call_llm(
     provider: str,
     model: str,
@@ -190,4 +210,35 @@ def call_llm(
             raw = proc.stderr or proc.stdout or ""
             _fail_provider("codex", proc.returncode, raw)
         return _parse_codex_output(proc.stdout)
+    if provider == "ollama":
+        # TEXT-ONLY local provider: no file-editing tools, no sessions (degrades gracefully,
+        # like codex). File-writing roles must stay tool-capable — tests/test_llm_ollama.py
+        # is the machine-check for that law.
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+        body = json.dumps({"model": model, "messages": messages, "stream": False}).encode("utf-8")
+        req = Request(_ollama_host() + "/api/chat", data=body,
+                      headers={"Content-Type": "application/json"})
+        try:
+            with urlopen(req, timeout=timeout) as resp:
+                raw = resp.read().decode("utf-8", "replace")
+        except HTTPError as exc:
+            try:
+                detail = exc.read().decode("utf-8", "replace")[-300:]
+            except Exception:
+                detail = ""
+            if exc.code == 404:
+                # Deterministic dead-end: the model is not pulled / the name is wrong.
+                raise RuntimeError(
+                    f"ollama exited 404: invalid model {model!r} (not pulled?): {detail}"
+                ) from exc
+            raise RateLimited(f"ollama HTTP {exc.code} — treating as transient usage limit "
+                              f"(back off and retry): {detail}") from exc
+        except OSError as exc:
+            # Server down or starting — self-resolves when the service returns (systemd unit).
+            raise RateLimited(f"ollama unreachable at {_ollama_host()} — treating as transient "
+                              f"usage limit (back off and retry): {exc}") from exc
+        return _parse_ollama_output(raw)
     raise ValueError(f"unknown provider {provider!r}")

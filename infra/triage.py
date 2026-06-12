@@ -47,7 +47,7 @@ RATE_LIMIT_HINTS = (
 # Deterministic dead-ends. Provider-CLI shapes are anchored on the `<provider> exited N:` prefix
 # that infra.llm._fail_provider emits (possibly wrapped, possibly spanning lines — DOTALL).
 _PERMANENT_PATTERNS = [re.compile(p, re.IGNORECASE | re.DOTALL) for p in (
-    r"(claude|codex) exited \d+:.*(unknown (option|argument|command)|unrecognized"
+    r"(claude|codex|ollama) exited \d+:.*(unknown (option|argument|command)|unrecognized"
     r"|invalid model|usage: claude|no such file|command not found|missing required)",
     r"unknown provider",
     r"unknown task.?type",
