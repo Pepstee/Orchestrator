@@ -44,7 +44,10 @@ AGENT_MODELS: dict[str, dict[str, str]] = {
     # provider, and the persistent overseer needs sessions — both machine-checked in
     # tests/test_llm_ollama.py. Judge-on-local keeps F5 cross-provider independence alive
     # while codex is capped; AGENTIC_JUDGE=openai:codex restores codex when limits reset.
-    "task_manager": {"provider": "ollama", "model": "qwen2.5-coder:7b"},
+    # Planning promoted back to claude (operator decision, 13 Jun 2026; overseer first-pulse
+    # evidence: 7b plans shallow/mistyped - planning is architecture, the doctrine's claude
+    # territory; plans are low-volume, high-leverage).
+    "task_manager": {"provider": "claude", "model": "sonnet"},
     "builder":      {"provider": "claude", "model": "sonnet"},   # cascades local->sonnet->opus by difficulty
     "tester":       {"provider": "claude", "model": "sonnet"},   # independent test-author (mutation gate backs it)
     "judge":        {"provider": "ollama", "model": "qwen2.5-coder:7b"},
