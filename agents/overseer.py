@@ -29,6 +29,7 @@ from agents.common import safe_main
 from core.models import AgentResult, Task
 from infra.atomic_io import write_text_atomic
 from infra.llm import LLMResult, call_llm
+from infra.notify import notify
 from infra.workspace import task_workdir
 from memory.overseer import (
     append_journal,
@@ -239,6 +240,11 @@ def _run_observe(task: Task, call: LLMCall, mind: Path | None = None) -> AgentRe
     note = str(data.get("journal") or "").strip() or first
     append_journal(mind, {"mode": "observe", "note": note[:1500],
                           "directed": len(spawned), "session": res.session_id})
+    if spawned:
+        # A directive-bearing pulse is a notable steering event: tell the operator in the
+        # overseer's own words. (12 Jun gap: the phone heard a project's abandonment but never
+        # the overseer's resurrection of it two minutes later — good news must notify too.)
+        notify("Overseer", note[:400])
     beliefs_update = str(data.get("beliefs_update") or "").strip()
     if beliefs_update:
         save_beliefs(mind, beliefs_update)   # whole-file replacement, length-capped (DG-8)

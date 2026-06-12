@@ -116,3 +116,27 @@ def test_pulse_health_alarms_on_failed_streak_but_permits_self_heal(tmp_path):
     wedged = overseer_pulse_health(repo, meta, notifier=lambda t, m: calls.append(m))
     assert calls, "two failed pulses must alarm"
     assert not wedged, "fresh pulses stay permitted — a new session is the self-heal"
+
+
+def test_directive_bearing_pulses_notify_the_operator(tmp_path, monkeypatch):
+    import agents.overseer as ov
+    rings = []
+    monkeypatch.setattr(ov, "notify", lambda t, m: rings.append(m) or True)
+
+    def directing(provider, model, prompt, **kw):
+        return LLMResult(text=json.dumps({
+            "journal": "Re-opened dubbing-studio with a hardening plan.",
+            "enqueue": [{"project": "dubbing-studio", "goal": "harden the tests"}],
+        }), cost_usd=0.0, model=model)
+
+    res = overseer_run(_observe_payload(), call=directing, state_root=str(tmp_path))
+    assert res.ok and rings and "Re-opened dubbing-studio" in rings[0], (
+        "the resurrection must ring the phone, not just the funeral (12 Jun gap)"
+    )
+
+    def quiet(provider, model, prompt, **kw):
+        return LLMResult(text=json.dumps({"journal": "All quiet."}), cost_usd=0.0, model=model)
+
+    rings.clear()
+    overseer_run(_observe_payload(), call=quiet, state_root=str(tmp_path))
+    assert not rings, "empty-directive pulses stay silent — no chatter"
