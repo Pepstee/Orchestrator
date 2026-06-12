@@ -184,6 +184,9 @@ def monitor_projects(
     for project in sorted({t.project for t in repo.list()}):
         if project.startswith("__"):
             continue                                  # reserved (e.g. the overseer's own meta-tasks)
+        if repo.dormant_since_abandonment(project):
+            continue                                  # parked by an abandonment (exhaustion OR directive):
+                                                      # revival is a deliberate NEW task, never the monitor's
         if not _all_terminal(repo, project):
             continue
         sig = _signature(repo, project)
@@ -359,6 +362,13 @@ def process_overseer_control(repo: TaskRepository) -> None:
         if target and not target.startswith("__"):
             if directive == "abandon":
                 n = abandon_project(repo, target, reason=str(p.get("reason", "")))
+                # An abandon directive must STICK: record it durably so the monitor parks the
+                # project instead of replanning it next cycle (12 Jun: the operator ordered
+                # single-project focus, the overseer cancelled 7 fleets' tasks, and the monitor
+                # resurrected every one of them within minutes — cancellation changed the
+                # signature, evaluation found gates unmet, and the stall path re-spawned work).
+                # Also closes the budget era, so a deliberate revival starts with a clean ledger.
+                repo.record_abandoned(target, reason=f"overseer directive: {p.get('reason', '')}"[:200])
                 notify("Overseer", f"abandoned {target}: {n} task(s) cancelled — {str(p.get('reason',''))[:80]}")
             elif directive == "reprioritise":
                 try:

@@ -63,6 +63,28 @@ def test_process_control_executes_abandon_and_completes(tmp_path: Path):
     assert repo.get("ctl").status == TaskStatus.DONE                # directive consumed (terminal)
 
 
+def test_abandon_directive_sticks_monitor_never_resurrects(tmp_path: Path):
+    # 12 Jun: operator ordered single-project focus; the overseer cancelled 7 projects' tasks; the
+    # monitor saw changed signatures, evaluated, and re-spawned work for every one within minutes.
+    # An abandon directive must park the project until something NEW is deliberately created.
+    from control.daemon import monitor_projects
+    repo = _repo(tmp_path)
+    repo.create(Task(task_id="w1", title="x", task_type="implement", project="parked"))
+    repo.create(Task(task_id="ctl", title="abandon parked", task_type="control", project="__overseer__",
+                     payload={"directive": "abandon", "project": "parked", "reason": "operator focus"}))
+    process_overseer_control(repo)
+    assert repo.dormant_since_abandonment("parked"), "directive abandonment is recorded durably"
+    before = {t.task_id for t in repo.list()}
+    monitor_projects(repo, evaluated={}, projects_root=str(tmp_path))
+    assert {t.task_id for t in repo.list()} == before, "the monitor spawned nothing for a parked project"
+    # The park survives a restart (replay rebuilds the watermark from the event log).
+    replayed = TaskRepository.replay(EventStore(str(tmp_path / "e.log")))
+    assert replayed.dormant_since_abandonment("parked")
+    # Revival is a conscious act: ANY new task for the project lifts the park.
+    repo.create(Task(task_id="w2", title="rescoped", task_type="plan", project="parked"))
+    assert repo.dormant_since_abandonment("parked") is False
+
+
 def test_process_control_ignores_reserved_target(tmp_path: Path):
     repo = _repo(tmp_path)
     repo.create(Task(task_id="ctl", title="abandon meta", task_type="control", project="__overseer__",

@@ -126,6 +126,18 @@ class TaskRepository:
         """Index (in creation order) where the post-abandonment era begins; 0 if never abandoned."""
         return self._abandon_marks.get(project, 0)
 
+    def dormant_since_abandonment(self, project: str) -> bool:
+        """True when the project was abandoned and NOTHING has been created for it since — it is
+        deliberately parked. Revival is a conscious act (an overseer re-scope or an operator goal:
+        a NEW task past the watermark); the project monitor must never resurrect a parked project
+        on its own initiative (12 Jun: an operator-ordered fleet park was undone within minutes —
+        the cancellations changed the signature, evaluation found gates unmet, and the stall path
+        re-spawned the work)."""
+        mark = self._abandon_marks.get(project)
+        if mark is None:
+            return False
+        return sum(1 for t in self._tasks.values() if t.project == project) <= mark
+
     def record_escalation(self, task_id: str, *, cause: str, reason: str, project: str = "") -> None:
         """Persist that a failure was escalated to the user (PA fast-path or retries exhausted)."""
         self._store.append(
