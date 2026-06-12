@@ -16,7 +16,7 @@ honour L1: one canonical implementation in v2 — reconcile, never duplicate.*
 | `supervisor.py` | Restart guard (max 20), graceful `RESTART_REQUESTED` sentinel, health file | **Port the pattern** — gives v2 hot-restart (no more manual bounces) under launchd | Phase B | I13, L8, I23 |
 | `watchdog.py` | Journal-scanning health monitor + alert emission | **Reference only** — its alert semantics are the 5,384-spam pathology; donor for the signal list, rebuilt under BG-4 | Phase B | BG-4 |
 | `velocity_monitor.py` | 5-state stall-detection machine over 6 FS signals | **Port with reworked thresholds** | Phase F | soak instrumentation |
-| `tail_metrics.py` | Deterministic ops metrics from the event log (no LLM) | **Port** | Phase C | 09 §7 metrics |
+| `tail_metrics.py` | Deterministic ops metrics from the event log (no LLM) | **☑ PORTED 12 Jun** → `control/scorecard.py` (runs/success, time-in-agent, waste counters, per-project merges+gates, runs-per-certification); tests `tests/test_scorecard.py` | done | 09 §7 metrics |
 | `preflight.py` | Boot-time environment validation (CLI, git config, disk, quota window) | **Donor** for the boot self-test | Phase B | BG-1 |
 | `health_check.py` | PID + staleness verdict with exit codes (healthy/degraded/down) | **Donor** for the dead-man checks | Phase B | BG-5 |
 
