@@ -74,7 +74,7 @@ HEARTBEAT_SECONDS = 12 * 3600
 # The persistent Overseer meta-agent. Its observe/succession tasks live under a RESERVED project name
 # so they are never mistaken for a buildable project by monitor_projects. It "thinks" on a pulse.
 OVERSEER_PROJECT = "__overseer__"
-OVERSEER_PULSE_SECONDS = 3600
+OVERSEER_PULSE_SECONDS = 2 * 3600   # two-hourly (operator decision, 12 Jun 2026: Pro-tier budget discipline)
 
 
 def _status_summary(repo: TaskRepository) -> str:
