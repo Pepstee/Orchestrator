@@ -28,6 +28,7 @@ class TaskRepository:
         self._hard_failures: Counter = Counter()       # task_id -> non-transient failure count
         self._transient_failures: Counter = Counter()  # task_id -> transient failure count
         self._attempt_inputs: dict[str, str] = {}      # task_id -> last failed attempt fingerprint
+        self._abandon_marks: dict[str, int] = {}       # project -> task-count at last abandonment
 
     def create(self, task: Task) -> Task:
         self._tasks[task.task_id] = task
@@ -113,8 +114,17 @@ class TaskRepository:
 
     def record_abandoned(self, project: str, *, reason: str) -> None:
         """The orchestrator gave up on a project it couldn't complete autonomously (planner + overseer
-        exhausted). Logged for the record; nothing waits on the operator. Re-enqueueable later."""
+        exhausted). Logged for the record; nothing waits on the operator. Re-enqueueable later.
+        An abandonment CLOSES the budget era: tasks created after it belong to a fresh era (the
+        12 Jun lesson — the overseer's resurrection inherited spent budgets and died at the
+        first failure, because era-opening was keyed on a payload field its directives can't set)."""
+        self._abandon_marks[project] = sum(
+            1 for t in self._tasks.values() if t.project == project)
         self._store.append("project_abandoned", {"project": project, "reason": reason})
+
+    def abandon_watermark(self, project: str) -> int:
+        """Index (in creation order) where the post-abandonment era begins; 0 if never abandoned."""
+        return self._abandon_marks.get(project, 0)
 
     def record_escalation(self, task_id: str, *, cause: str, reason: str, project: str = "") -> None:
         """Persist that a failure was escalated to the user (PA fast-path or retries exhausted)."""
@@ -251,4 +261,8 @@ class TaskRepository:
                     repo._hard_failures[ev.data["task_id"]] += 1
             elif ev.kind == "attempt_inputs":
                 repo._attempt_inputs[ev.data["task_id"]] = ev.data.get("fingerprint", "")
+            elif ev.kind == "project_abandoned":
+                p = ev.data.get("project", "")
+                repo._abandon_marks[p] = sum(
+                    1 for t in repo._tasks.values() if t.project == p)
         return repo

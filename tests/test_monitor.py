@@ -243,3 +243,24 @@ def test_rescope_resets_plan_and_oversee_budgets(tmp_path: Path):
     plans, oversees = _era_counts(repo, "demo")
     assert plans == 2, "the era starts at the contract: rescope + 1, not 27"
     assert oversees == 1, "old-era interventions don't count against the new contract"
+
+
+def test_abandonment_closes_the_era_for_whoever_resurrects(tmp_path: Path):
+    """12 Jun: the overseer's resurrection plan (bare payload — directives can't set
+    mode='rescope') inherited the dead era's spent budgets and was abandoned at first failure.
+    An abandonment now closes the era; post-abandonment tasks start with a clean ledger."""
+    from control.daemon import _era_counts
+    repo = TaskRepository(EventStore(tmp_path / "e.log"))
+    for i in range(25):
+        repo.create(Task(task_id=f"old{i}", title="plan", task_type="plan", project="demo"))
+    for i in range(4):
+        repo.create(Task(task_id=f"ov{i}", title="iv", task_type="oversee", project="demo"))
+    repo.record_abandoned("demo", reason="exhausted")
+    repo.create(Task(task_id="resurrect", title="MUTATION-HARDENING (bare payload)",
+                     task_type="plan", project="demo"))
+    repo.create(Task(task_id="ov_new", title="iv", task_type="oversee", project="demo"))
+    plans, oversees = _era_counts(repo, "demo")
+    assert plans == 1 and oversees == 1, "the resurrection owns a fresh era, no payload magic"
+    # and the watermark survives a restart (replayed from the event log)
+    revived = TaskRepository.replay(EventStore(tmp_path / "e.log"))
+    assert revived.abandon_watermark("demo") == 29

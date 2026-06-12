@@ -108,11 +108,11 @@ def _era_counts(repo: TaskRepository, project: str) -> tuple[int, int]:
     '20/20 iterations' of which most belonged to the abandoned June-era goal, and every future
     C9.x re-scope would arrive pre-exhausted and head straight for abandonment."""
     proj = [t for t in repo.list() if t.project == project]
-    start = 0
+    start = repo.abandon_watermark(project)   # an abandonment closes the era (12 Jun lesson)
     for i, t in enumerate(proj):
         if (t.task_type == "plan" and isinstance(t.payload, dict)
                 and t.payload.get("mode") == "rescope"):
-            start = i
+            start = max(start, i)
     era = proj[start:]
     return (sum(1 for t in era if t.task_type == "plan"),
             sum(1 for t in era if t.task_type == "oversee"))
