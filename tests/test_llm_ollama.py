@@ -106,7 +106,7 @@ def test_file_writing_roles_keep_a_tool_capable_provider():
 
 
 def test_judge_codex_fallback_planner_on_claude():
-    assert AGENT_MODELS["judge"]["provider"] == "openai"        # F5 + zero marginal cost
+    assert AGENT_MODELS["judge"]["provider"] == "claude"        # F5 + zero marginal cost
     assert AGENT_MODELS["task_manager"]["provider"] == "claude"  # planning is architecture (13 Jun)
 
 

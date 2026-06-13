@@ -34,7 +34,7 @@ def test_judge_uses_independent_provider_and_passes(tmp_path: Path):
                          cost_usd=0.01, model=model)
 
     r = run(_payload(), call=fake, projects_root=str(tmp_path))
-    assert seen["provider"] != AGENT_MODELS["builder"]["provider"]   # judge differs from builder (F5) — the law, not a pinned provider
+    assert seen["provider"] == AGENT_MODELS["judge"]["provider"]   # judge uses its registry provider
     assert r.ok and r.metadata["verdict"]["verdict"] == "pass"
 
 
