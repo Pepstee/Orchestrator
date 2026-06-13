@@ -134,7 +134,7 @@ def _project_state(repo: TaskRepository, project: str, root: Path) -> dict:
     try:
         pdir = resolve_project_dir(root, project)
         files = sorted(str(p.relative_to(pdir)) for p in pdir.rglob("*")
-                       if p.is_file() and "__pycache__" not in p.parts)[:60]
+                       if p.is_file() and not ({".git", "__pycache__", ".venv", "node_modules", ".pytest_cache", ".ruff_cache", ".mypy_cache", ".egg-info"} & set(p.parts)))[:60]
     except (OSError, ValueError):
         pass
     return {"goal": goal, "acceptance": acceptance,
