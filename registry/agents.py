@@ -56,7 +56,9 @@ AGENT_MODELS: dict[str, dict[str, str]] = {
     # and tokens-per-certified-criterion — the premium must pay for itself in fewer attempts.
     # If the host CLI rejects the model string, the failure is PERMANENT (loud) and the env
     # override AGENTIC_OVERSEER="claude:opus" reroutes it without a code change.
-    "overseer":     {"provider": "claude", "model": "claude-fable-5"},
+    # Fable suspended 12 Jun 2026 (US export-control directive); downgraded to the next-smartest
+    # available model, Opus 4.8 (operator decision, 13 Jun). Restore to fable when access returns.
+    "overseer":     {"provider": "claude", "model": "claude-opus-4-8"},
 }
 
 
