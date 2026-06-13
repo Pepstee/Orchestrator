@@ -53,3 +53,12 @@ def test_judge_handles_call_failure(tmp_path: Path):
 
     r = run(_payload(), call=boom, projects_root=str(tmp_path))
     assert not r.ok and "codex missing" in r.cause
+
+
+def test_parse_verdict_tolerates_fences_and_multiline():
+    from agents.judge import parse_verdict
+    fenced = "My assessment:\n```json\n{\n  \"verdict\": \"pass\",\n  \"confidence\": 0.92,\n  \"reasons\": [\"works\"]\n}\n```\n"
+    v = parse_verdict(fenced)
+    assert v["verdict"] == "pass" and v["confidence"] == 0.92
+    assert parse_verdict("no json here at all")["verdict"] == "fail"
+    assert parse_verdict('{"verdict":"pass","confidence":"high"}')["confidence"] == 0.9   # word confidence -> float

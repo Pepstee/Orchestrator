@@ -52,18 +52,37 @@ def build_prompt(task: Task) -> str:
 
 
 def parse_verdict(text: str) -> dict:
-    """Scan backwards for the last JSON object carrying a `verdict`; fail-safe to a fail verdict."""
-    for line in reversed([ln.strip() for ln in text.splitlines() if ln.strip()]):
+    """Extract the LAST JSON object carrying a 'verdict' from anywhere in the text. Tolerates
+    markdown code fences, pretty-printed/multi-line JSON, and surrounding prose; fail-safe to fail."""
+    cleaned = (text or "").replace("```json", " ").replace("```", " ")
+    cands = [ln.strip() for ln in cleaned.splitlines() if ln.strip()]
+    depth = 0
+    start = None
+    for i, ch in enumerate(cleaned):
+        if ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}" and depth > 0:
+            depth -= 1
+            if depth == 0 and start is not None:
+                cands.append(cleaned[start:i + 1])
+    for cand in reversed(cands):
         try:
-            data = json.loads(line)
-        except json.JSONDecodeError:
+            data = json.loads(cand)
+        except (json.JSONDecodeError, ValueError):
             continue
         if isinstance(data, dict) and "verdict" in data:
             verdict = "pass" if str(data.get("verdict", "")).lower() == "pass" else "fail"
+            raw_conf = data.get("confidence", 0.0)
+            try:
+                confidence = float(raw_conf)
+            except (TypeError, ValueError):
+                confidence = {"high": 0.9, "medium": 0.6, "low": 0.3, "none": 0.0}.get(str(raw_conf).strip().lower(), 0.5)
             return {
                 "verdict": verdict,
                 "reasons": [str(r) for r in (data.get("reasons") or [])][:10],
-                "confidence": float(data.get("confidence", 0.0) or 0.0),
+                "confidence": confidence,
             }
     return {"verdict": "fail", "reasons": ["unparseable verdict from judge"], "confidence": 0.0}
 
