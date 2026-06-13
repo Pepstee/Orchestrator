@@ -50,7 +50,7 @@ AGENT_MODELS: dict[str, dict[str, str]] = {
     "task_manager": {"provider": "claude", "model": "sonnet"},
     "builder":      {"provider": "claude", "model": "sonnet"},   # cascades local->sonnet->opus by difficulty
     "tester":       {"provider": "claude", "model": "sonnet"},   # independent test-author (mutation gate backs it)
-    "judge":        {"provider": "ollama", "model": "qwen2.5-coder:7b"},
+    "judge":        {"provider": "openai", "model": "codex", "fallback": {"provider": "claude", "model": "sonnet"}},
     # Overseer promoted Opus 4.8 -> Fable 5 (operator decision, 9 Jun 2026; DG-3: strongest model
     # to the highest-stakes judgement role first). Metric to watch per DG-3: retries-per-completion
     # and tokens-per-certified-criterion — the premium must pay for itself in fewer attempts.

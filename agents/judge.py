@@ -14,7 +14,7 @@ from typing import Callable
 
 from agents.common import safe_main
 from core.models import AgentResult, Task
-from infra.llm import LLMResult, call_llm
+from infra.llm import LLMResult, call_llm, call_spec
 from infra.workspace import default_projects_root, resolve_project_dir
 from registry.agents import model_for
 
@@ -74,8 +74,8 @@ def run(payload: dict, call: LLMCall = call_llm, projects_root: str | None = Non
     root = Path(projects_root) if projects_root else default_projects_root()
     project_dir = resolve_project_dir(root, task.project)
     try:
-        res = call(
-            spec["provider"], spec["model"], build_prompt(task),
+        res = call_spec(
+            spec, build_prompt(task), call=call,
             system=SYSTEM_PROMPT, cwd=str(project_dir),
         )
     except Exception as exc:

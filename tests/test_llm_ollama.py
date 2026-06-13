@@ -105,6 +105,21 @@ def test_file_writing_roles_keep_a_tool_capable_provider():
     assert AGENT_MODELS["overseer"]["provider"] == "claude"
 
 
-def test_judge_runs_locally_planner_on_claude():
-    assert AGENT_MODELS["judge"]["provider"] == "ollama"        # F5 + zero marginal cost
+def test_judge_codex_fallback_planner_on_claude():
+    assert AGENT_MODELS["judge"]["provider"] == "openai"        # F5 + zero marginal cost
     assert AGENT_MODELS["task_manager"]["provider"] == "claude"  # planning is architecture (13 Jun)
+
+
+def test_call_spec_falls_back_when_primary_capped():
+    from infra.llm import call_spec, RateLimited, LLMResult
+    calls = []
+    def fake(provider, model, prompt, **kw):
+        calls.append((provider, model))
+        if provider == "openai":
+            raise RateLimited("codex usage/rate limit")
+        return LLMResult(text="ok", cost_usd=0.0, model=model)
+    spec = {"provider": "openai", "model": "codex",
+            "fallback": {"provider": "claude", "model": "sonnet"}}
+    res = call_spec(spec, "judge this", call=fake)
+    assert res.text == "ok"
+    assert calls == [("openai", "codex"), ("claude", "sonnet")]

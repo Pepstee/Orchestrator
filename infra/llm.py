@@ -242,3 +242,15 @@ def call_llm(
                               f"usage limit (back off and retry): {exc}") from exc
         return _parse_ollama_output(raw)
     raise ValueError(f"unknown provider {provider!r}")
+
+
+def call_spec(spec, prompt, *, call=call_llm, **kwargs):
+    """Run spec's provider/model; on failure, fall back to spec['fallback'] if declared.
+    Judge: codex when funded, Claude when codex is capped (13 Jun 2026)."""
+    try:
+        return call(spec["provider"], spec["model"], prompt, **kwargs)
+    except (RuntimeError, OSError):
+        fb = spec.get("fallback")
+        if not fb:
+            raise
+        return call(fb["provider"], fb["model"], prompt, **kwargs)

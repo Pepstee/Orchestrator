@@ -14,7 +14,7 @@ import os
 
 from infra.llm import call_llm
 
-PRESCREEN_MODEL = os.environ.get("AGENTIC_PRESCREEN_MODEL", "qwen2.5-coder:7b")
+PRESCREEN_MODEL = os.environ.get("AGENTIC_PRESCREEN_MODEL", "qwen3:8b")
 _TIMEOUT_S = 120   # a screen that dawdles is a screen that wakes
 
 _SYSTEM = (
