@@ -23,6 +23,7 @@ TASK_TYPE_TO_AGENT: dict[str, str] = {
     "test": "tester",        # the INDEPENDENT test-author (separate from the builder — anti-collusion)
     "validate": "judge",
     "oversee": "overseer",
+    "research": "researcher",  # deep tiered research; its output is gated by validation.research_contract (DV-3)
 }
 
 # agent -> launch command (the subprocess contract).
@@ -32,6 +33,7 @@ AGENT_COMMANDS: dict[str, list[str]] = {
     "tester":       [_PY, "-m", "agents.tester"],
     "judge":        [_PY, "-m", "agents.judge"],
     "overseer":     [_PY, "-m", "agents.overseer"],
+    "researcher":   [_PY, "-m", "agents.researcher"],
 }
 
 # agent -> model assignment, decided by role stakes (ratified decision D4).
@@ -49,6 +51,9 @@ AGENT_MODELS: dict[str, dict[str, str]] = {
     # If the host CLI rejects the model string, the failure is PERMANENT (loud) and the env
     # override AGENTIC_OVERSEER="claude:opus" reroutes it without a code change.
     "overseer":     {"provider": "claude", "model": "claude-fable-5"},
+    # Deep-research synthesis. Promotes to Fable 5 AFTER the Overseer eval (locked order: Overseer
+    # first, DV-4); runs on sonnet until then. Its adversarial verification stays cross-provider.
+    "researcher":   {"provider": "claude", "model": "sonnet"},
 }
 
 
