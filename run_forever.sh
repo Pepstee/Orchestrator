@@ -34,6 +34,15 @@ while [ ! -f STOP ]; do
   "$PY" -m control.daemon
   code=$?
   [ -f STOP ] && break
+  if [ "$code" -eq 3 ]; then
+    # BG-1 boot self-test refused dispatch (SystemExit 3). This is DETERMINISTIC — a law-linked
+    # check is red — so relaunching can never fix it; looping just re-runs the suite forever
+    # (the 8 Jul crash-loop: planning/16 missing, ~30s per futile relaunch). Same doctrine as
+    # the 401 fail-fast: a deterministic refusal stays down until the operator fixes the cause.
+    echo "[supervisor] $(date '+%F %T') daemon refused to boot (BG-1 self-test, exit 3) — writing STOP and staying down; fix the red check, then rm STOP and relaunch."
+    echo "BG-1 boot self-test failed at $(date '+%F %T') — see the daemon's notification / run the run-gates skill for the red check" > STOP
+    break
+  fi
   echo "[supervisor] $(date '+%F %T') daemon exited ($code) — relaunching in 5s (touch STOP to stop)"
   sleep 5
 done
