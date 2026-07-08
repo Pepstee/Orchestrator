@@ -393,6 +393,7 @@ def serve(
     on_cycle: Callable[[], None] | None = None,
     pa_consult: PAConsult | None = None,
     allowed_projects: "Callable[[], set[str] | None] | None" = None,
+    projects_root: str | None = None,
 ) -> int:
     """Run ready tasks CONCURRENTLY (up to max_workers agents at once) until should_stop(), ingesting
     newly-enqueued work each cycle and running an optional per-cycle hook (project monitoring). Sleeps
@@ -413,7 +414,7 @@ def serve(
         processed = run_concurrent(repo, invoke, governor, max_workers=max_workers,
                                    project_cap=project_cap, max_steps=batch, pa_consult=pa_consult,
                                    should_stop=should_stop, maintenance=_maintain,
-                                   allowed_projects=allowed_projects)
+                                   allowed_projects=allowed_projects, projects_root=projects_root)
         total += processed
         if processed == 0:
             time.sleep(poll_interval)

@@ -29,7 +29,8 @@ def test_serve_processes_ready_tasks_then_stops(tmp_path: Path):
     repo.create(Task(task_id="a", title="a", task_type="implement", project="p"))
     repo.create(Task(task_id="b", title="b", task_type="validate", depends_on=["a"], project="p"))
     total = serve(repo, _gov(tmp_path), _ok, should_stop=lambda: _all_terminal(repo),
-                  poll_interval=0, inbox=str(tmp_path / "inbox"))
+                  poll_interval=0, inbox=str(tmp_path / "inbox"),
+                  projects_root=str(tmp_path / "projects"))
     assert total == 2
     assert repo.get("a").status == TaskStatus.DONE and repo.get("b").status == TaskStatus.DONE
 
@@ -38,7 +39,8 @@ def test_serve_stops_immediately_when_asked(tmp_path: Path):
     repo = TaskRepository(EventStore(tmp_path / "e.log"))
     repo.create(Task(task_id="a", title="a", task_type="implement", project="p"))
     total = serve(repo, _gov(tmp_path), _ok, should_stop=lambda: True,
-                  poll_interval=0, inbox=str(tmp_path / "inbox"))
+                  poll_interval=0, inbox=str(tmp_path / "inbox"),
+                  projects_root=str(tmp_path / "projects"))
     assert total == 0
     assert repo.get("a").status == TaskStatus.QUEUED   # never ran
 
@@ -49,7 +51,8 @@ def test_serve_halts_on_kill_switch(tmp_path: Path):
     gov = _gov(tmp_path, cap=100.0)
     gov.engage_kill_switch("operator stop")
     total = serve(repo, gov, _ok, should_stop=lambda: gov.should_stop()[0],
-                  poll_interval=0, inbox=str(tmp_path / "inbox"))
+                  poll_interval=0, inbox=str(tmp_path / "inbox"),
+                  projects_root=str(tmp_path / "projects"))
     assert total == 0
 
 
@@ -59,7 +62,8 @@ def test_serve_ingests_inbox_then_runs(tmp_path: Path):
     inbox = tmp_path / "inbox"
     drop(Task(task_id="t1", title="x", task_type="implement", project="p"), inbox)
     total = serve(repo, _gov(tmp_path), _ok, should_stop=lambda: _all_terminal(repo),
-                  poll_interval=0, inbox=str(inbox))
+                  poll_interval=0, inbox=str(inbox),
+                  projects_root=str(tmp_path / "projects"))
     assert total == 1 and repo.get("t1").status == TaskStatus.DONE
 
 
