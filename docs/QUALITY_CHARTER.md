@@ -52,22 +52,25 @@ override it.
 - Dependencies pinned and justified; no speculative ones.
 
 ### 6. Quality blocks completion
-A project reaches "ready for your confirmation" **only** when every automated gate is clean:
+A project is certified **only** when every automated gate is clean:
 tests ∧ acceptance ∧ judge ∧ authenticity ∧ execution ∧ mutation. Anything less is not "done but
 imperfect" — it is **not done**, and it stays in the work loop (overseer intervention) rather than
-landing in your tray.
+being certified.
 
-### 7. You are the final gate
-The automated perimeter gets a project to *objectively complete and honest*. You sign off on *"I'd
-showcase this."* Taste stays with the human; nothing is auto-marked done without your one-tap
-confirmation.
+### 7. Certification is self-issued; the operator steers, not gates *(DG-2, ratified — supersedes the earlier "final gate" wording; see planning/09)*
+The automated perimeter gets a project to *objectively complete and honest*, and the daemon
+self-certifies it (zero-touch) — you are notified, never waited on. Taste still belongs to the
+human, exercised through steering rather than gating: Telegram feedback becomes overseer turns,
+improvement rounds continue after certification, and certification is the trust boundary for
+publication and module activation (planning/17 §9).
 
 ---
 
 ## How a stuck project is handled (no silent shipping)
 If the planner runs out of moves and the gates still fail, the **overseer** is dispatched to diagnose
-and fix (bounded). Only when both the planner and the overseer are exhausted does the project
-escalate to you — labelled *"not good enough yet,"* never quietly delivered as done.
+and fix (bounded). Only when both the planner and the overseer are exhausted is the project
+abandoned — durably logged and notified as *"not good enough yet,"* never quietly delivered as done.
+It can always be revived by a deliberate new task.
 
 *This charter is versioned and reviewed like production code (rule A1). Changing the bar is a
 deliberate, traceable act — not a convenience taken mid-build to get unstuck.*

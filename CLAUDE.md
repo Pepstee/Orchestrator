@@ -62,8 +62,10 @@ registry = leaf (imports nothing internal)        selfdev = quarantined (nothing
   anti-collusion), `validate`→judge, `oversee`→overseer, `control`→(executed by the daemon, never an
   agent).
 - **Completion contract** — a project is done only when ALL gates pass: tests ∧ acceptance ∧ judge ∧
-  authenticity ∧ user. The first four are automated; `user` is your one-tap confirmation.
-- **Assurance ladder** — before a project reaches your tray it must come back clean from
+  authenticity. All four are automated; under DG-2 (zero-touch, planning/09 §DG-2) the daemon
+  SELF-CERTIFIES once the assurance ladder is also clean — nothing waits on the operator. The
+  confirmation channel (`control/confirm.py`) still exists but gates nothing.
+- **Assurance ladder** — before a project is certified it must come back clean from
   tests-rerun → acceptance-by-execution → mutation → adversarial. A finding routes it to the
   overseer, NOT to you (quality blocks completion).
 - **PA (Programmatic Architecture)** — `state/pa_rules.json`: deterministic failure-cause→action
@@ -79,9 +81,9 @@ goal → control.intake (--plan) → a 'plan' task in state/inbox/ → daemon in
   → task_manager plans the next increment: implement → test → validate (+ acceptance file)
   → builder writes code; tester writes adversarial tests; judge reviews (cross-provider)
   → project graph drains → evaluate_project (tests, acceptance, judge, authenticity)
-       3/4 automated pass → assurance ladder (must be clean) → pending_user → ping you
-       gates unmet → replan; planner spent → overseer intervenes; both spent → escalate
-  → you confirm (the 4th gate) → done
+       all 4 gates pass → assurance ladder (must be clean) → SELF-CERTIFIED (DG-2) → notify
+                          → FOREVER-IMPROVE rounds until the planner returns []
+       gates unmet → replan; planner spent → overseer intervenes; both spent → abandoned (logged)
 The overseer runs in parallel on its own clock: observe-pulse, succession handoff, session reset.
 ```
 
@@ -90,7 +92,7 @@ The overseer runs in parallel on its own clock: observe-pulse, succession handof
 ## Conventions
 
 - **Gates are sacred.** Every change must pass `ruff check .` (E,F), `lint-imports` (3 contracts), and
-  `pytest tests/` before it's done. Use the **`run-gates`** skill. ~207 tests today.
+  `pytest tests/` before it's done. Use the **`run-gates`** skill.
 - **`infra.atomic_io` is the ONLY sanctioned file writer/deleter** (law L7). Never raw
   `open(w)`/`write_text`/`unlink`/`rmtree` in source — an architecture test scans for it
   (`tests/architecture/test_file_preservation.py`). `tests/` and `projects/` are exempt.

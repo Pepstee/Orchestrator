@@ -1,9 +1,9 @@
 """infra.llm — provider-abstracted LLM invocation (the seam for the Claude->local migration).
 
 Shells out to a provider's CLI and returns text + cost. The Claude path is implemented and its
-JSON parser is unit-tested against the real CLI output shape. The OpenAI/Codex path is wired but
-deliberately raises until its parser is validated against real `codex exec --json` output (the
-Judge slice) — never ship an unverified parser as if it works (probe-before-you-build).
+JSON parser is unit-tested against the real CLI output shape. The Codex parser was validated
+against real `codex exec --json` output on 2026-06-01 (see _parse_codex_output) — the earlier
+"deliberately raises until validated" posture is retired.
 """
 from __future__ import annotations
 
@@ -24,6 +24,7 @@ def _default_timeout() -> int:
 
 # Classification is the triage module's job (one taxonomy, L1). Names re-exported here because
 # the dispatcher/repository historically import them from infra.llm.
+from infra.notify import notify
 from infra.triage import RATE_LIMIT_HINTS as RATE_LIMIT_HINTS
 from infra.triage import is_transient_cause as is_transient_cause
 
@@ -56,6 +57,22 @@ _HARD_CLI_ERROR_HINTS = (
     "permission denied", "missing required",
 )
 
+# Authentication failures (expired/revoked OAuth after a `claude login`, 401s). Deterministic until a
+# human re-authenticates, so they must FAIL FAST and notify — the pre-fix behaviour classified them as
+# transient and looped all night (HANDOFF §4). Kept tight: matched only against provider stderr on a
+# non-zero exit, never against arbitrary task output.
+_AUTH_ERROR_HINTS = (
+    "401", "unauthorized", "unauthorised", "authentication_error", "authentication failed",
+    "invalid api key", "invalid bearer", "oauth token has expired", "token expired",
+    "token revoked", "please run /login", "please log in", "not logged in",
+)
+
+
+def _looks_auth_error(text: str) -> bool:
+    low = (text or "").lower()
+    return any(hint in low for hint in _AUTH_ERROR_HINTS)
+
+
 # A resume aimed at a session that is missing / expired / not a valid id. NOT a hard failure: the work
 # shouldn't die with the session — _run_claude falls back to a fresh session and carries on.
 _SESSION_ERROR_HINTS = (
@@ -83,6 +100,16 @@ def _fail_provider(provider: str, rc: int, raw: str) -> None:
     message so the dispatcher's is_transient_cause classifies it transient via the single hint list."""
     if _looks_rate_limited(raw):
         raise RateLimited(f"{provider} usage/rate limit: {raw[-300:]}")
+    if _looks_auth_error(raw):
+        # Deterministic until a human re-authenticates: fail fast, notify once, never loop.
+        # The "auth error" wording is what infra.triage classifies PERMANENT — one taxonomy (L1).
+        notify(
+            "Orchestrator",
+            f"{provider} auth error — run `claude login` to re-authenticate; failing fast",
+        )
+        raise RuntimeError(
+            f"{provider} auth error (exited {rc}): {raw[-300:]} — run `claude login` to re-authenticate"
+        )
     if _is_hard_cli_error(raw):
         raise RuntimeError(f"{provider} exited {rc}: {raw[-300:]}")
     raise RateLimited(

@@ -1,6 +1,8 @@
 # 17 — Modular Engine Specification (kernel, modules, containers, selfdev, focus)
 
-*Status: PROPOSED — drafted 8 July 2026 from an operator design session; awaiting ratification.
+*Status: **RATIFIED by the operator, 8 July 2026** — the ME-1..8 series and the L9 text
+amendment (§1) are ratified; container runtime decided: **OrbStack**. `claude setup-token`
+confirmed as the Phase-1 auth command.
 Feeds the v3 build charter (16, pending move-in from the operator scratchpad). House rule applies
 throughout: every mechanism below names the machine check that will police it — a mechanism
 without a check does not ship (PRIME). British spelling.*
@@ -32,7 +34,8 @@ progression), never attention [RATIFIED-8JUL].
 ## 1. Proposed laws (ME series — Modular Engine)
 
 *Numbering note: ME-n is a new series to avoid collision with DV-n (v3 capability laws) and
-DG-n (ratified decision gates). On ratification these join `charter/laws.py` as data.*
+DG-n (ratified decision gates). Ratified 8 Jul 2026 — these join v3's `charter/laws.py` as
+data (status "deferred" until each subsystem lands, per the law-intake rule).*
 
 | Id | Law | Enforcing check (to be written) |
 |---|---|---|
@@ -45,7 +48,7 @@ DG-n (ratified decision gates). On ratification these join `charter/laws.py` as 
 | ME-7 | **Focus is singular, hot, and human-held.** Exactly one focused project; the focus file is re-read every cycle; no agent code path writes it (Overseer may recommend, only operator surfaces write). | `tests/architecture/test_focus_single_writer.py` (successor of `test_breadth_cap.py`) + `tests/test_focus_hot_switch.py` |
 | ME-8 | **Certification is the trust boundary.** Publication, module activation, and v3 slice progression each require a recorded certification of the producing project. | `tests/test_certification_trust_boundary.py` — uncertified module refuses to load (with ME-2); publish script refuses uncertified project |
 
-**Law text amendment required (operator ratification):** L9 changes from
+**Law text amendment (RATIFIED 8 Jul 2026):** L9 changes from
 "self-modification is quarantined" to **"no LIVE self-modification — self-development flows
 exclusively through the selfdev candidate/promotion pipeline (ME-5)"**. L9R (the runtime fence
 on the running tree) is retained unchanged; its threat model shrinks because containerised
@@ -117,8 +120,8 @@ The browser/Gmail login is OAuth; it leaves a bearer token on the host (macOS: K
 Linux: `~/.claude/.credentials.json`). That token is the credential we manage.
 
 - **Phase 1 — headless token.** Mint a long-lived token for non-interactive use
-  (`claude setup-token` — VERIFY exact command against current CLI docs when the usage window
-  resets); inject into worker containers as a secret; egress allowlist pinned to Anthropic
+  (`claude setup-token` — confirmed, and the operator has already authenticated);
+  inject into worker containers as a secret; egress allowlist pinned to Anthropic
   endpoints so the token cannot travel anywhere else. Host is the sole refresher; a token
   expiring mid-run fails TRANSIENT and retries post-refresh.
   *Check:* `tests/test_runner_auth.py` — profile contains the secret iff manifest declares it;
@@ -200,7 +203,7 @@ check, and reconciling zero-touch language across CLAUDE.md / Quality Charter §
 
 Open items for the charter merge: exact slice placement of kernel/ports vs container runner vs
 broker (suggested order: kernel+ME-2 loader first, Phase-1 auth runner second, focus third,
-selfdev pipeline fourth, broker fifth, ME-6 drill sixth); ratification of the ME series and the
-L9 text amendment; verification of `claude setup-token`; container runtime choice.
+selfdev pipeline fourth, broker fifth, ME-6 drill sixth). Settled 8 Jul: ME series + L9
+amendment ratified; `claude setup-token` confirmed and authenticated; runtime = OrbStack.
 
 *End of spec.*

@@ -54,6 +54,15 @@ _PERMANENT_PATTERNS = [re.compile(p, re.IGNORECASE | re.DOTALL) for p in (
     r"agent not found",
     r"prerequisite failed",
     r"abandoned by overseer",
+    # Auth failures are deterministic until a human runs `claude login` — retrying burns a full
+    # agent run to fail identically (the 401-as-transient overnight loop, HANDOFF §4). Anchored on
+    # the "<provider> auth error" prefix infra.llm._fail_provider emits, plus the CLI's own
+    # unambiguous wordings; deliberately NOT a bare "401" (false PERMANENTs are worse).
+    r"(claude|codex) auth error",
+    r"authentication[_ ](error|failed)",
+    r"oauth token (has )?(expired|revoked)",
+    r"please run /login",
+    r"not logged in",
 )]
 
 # Environment faults that self-resolve (ported from v1's _TRANSIENT_PATTERNS, trimmed to the
