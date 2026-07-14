@@ -20,7 +20,7 @@ from typing import Callable
 from control.budget import BudgetGovernor
 from control.loop import RATE_LIMIT_BACKOFF_SECONDS
 from core.models import AgentResult, Task
-from dispatch.dispatcher import Invoke, PAConsult, is_rate_limited, settle
+from dispatch.dispatcher import Invoke, PAConsult, is_rate_limited, is_transient, settle
 from dispatch.repository import TaskRepository
 from infra.notify import notify
 from infra.workspace import default_projects_root, resolve_project_dir
@@ -69,7 +69,13 @@ def _settle_one(fut, repo: TaskRepository, task: Task, pa_consult: PAConsult | N
                                f"({tamper[:120]}) — reverted, quarantined, task failed")
     repo.record_result(task.task_id, result)
     governor.charge(float(result.metadata.get("cost_usd", 0.0)))
-    governor.record_outcome(result.ok)   # burn-rate breaker input (one signal per settled run)
+    # Burn-rate breaker input — but ONLY quality signals. A transient failure (usage/rate limit,
+    # restart-kill, env fault) is quota weather, not evidence the work is bad: counting it poisons
+    # the trailing window so the breaker trips the moment real work resumes after a drought
+    # (8 Jul fence-storm amnesty; 14 Jul re-trip after six rate-limited hours — second occurrence,
+    # so the rule moves into code). Successes always count; only transient failures are excluded.
+    if result.ok or not is_transient(result):
+        governor.record_outcome(result.ok)
     base_state = ""
     if not result.ok and not task.project.startswith("__"):
         try:

@@ -129,3 +129,34 @@ def test_pool_isolates_concurrent_same_project_and_merges(tmp_path: Path):
     assert repo.get("t1").status == TaskStatus.DONE and repo.get("t2").status == TaskStatus.DONE
     demo = proj_root / "demo"
     assert (demo / "t1.py").exists() and (demo / "t2.py").exists()   # both merged into main
+
+
+def test_breaker_ignores_transient_failures(tmp_path: Path):
+    """Quota weather is not a quality signal (14 Jul: six rate-limited hours filled the trailing
+    window, so the breaker tripped the moment real work resumed). Transient failures must not
+    feed the burn-rate breaker; genuine failures must. A rate-limited settle ends its batch, so
+    the transient half drives one batch per settle (backoff injected as a no-op)."""
+    gov = _gov(tmp_path)
+    repo = TaskRepository(EventStore(tmp_path / "e.log"))
+    for i in range(25):
+        repo.create(Task(task_id=f"t{i}", title=f"t{i}", task_type="implement", project=f"P{i}"))
+
+    def rate_limited(_t: Task) -> AgentResult:
+        return AgentResult(ok=False, summary="limit",
+                           cause="RateLimited: claude usage/rate limit: weekly limit reached")
+
+    for _ in range(25):   # each batch settles one task then ends on the rate-limit signal
+        run_concurrent(repo, rate_limited, gov, max_workers=1, max_steps=1,
+                       isolate=False, project_cap=0, backoff=lambda: None)
+    assert not gov.burn_paused(), "25 rate-limited settles must NOT trip the breaker"
+
+    repo2 = TaskRepository(EventStore(tmp_path / "e2.log"))
+    for i in range(40):
+        repo2.create(Task(task_id=f"h{i}", title=f"h{i}", task_type="implement", project=f"Q{i}"))
+
+    def hard_fail(_t: Task) -> AgentResult:
+        return AgentResult(ok=False, summary="broken", cause="tests failed: assertion error")
+
+    run_concurrent(repo2, hard_fail, gov, max_workers=4, max_steps=40,
+                   isolate=False, project_cap=0, backoff=lambda: None)
+    assert gov.burn_paused(), "40 genuine failures MUST trip the breaker"
