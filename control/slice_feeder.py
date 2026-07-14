@@ -142,9 +142,15 @@ def next_slice_due(repo: TaskRepository, cursor: int) -> bool:
 
 
 def build_slice_task(n: int) -> Task:
+    """Each slice's plan opens a FRESH contract era (payload mode='rescope', honoured by the
+    daemon's _era_counts): 20 planner passes + the full overseer-intervention budget PER SLICE,
+    not per build. Without this, all ten slices share one era — 10 Jul: Slice 2 arrived with
+    Slice 1's spent ledger and was abandoned mid-hardening. A rescope also revives a parked
+    (abandoned) project: the new task passes the abandonment watermark deliberately."""
     goal, accept = SLICES[n]
     return Task(task_id=uuid.uuid4().hex[:12], title=goal, task_type="plan",
-                project=PROJECT, acceptance_criteria=list(accept))
+                project=PROJECT, acceptance_criteria=list(accept),
+                payload={"mode": "rescope"})
 
 
 def read_cursor(path: Path) -> int:

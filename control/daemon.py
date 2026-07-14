@@ -65,8 +65,13 @@ MAX_PLAN_ITERATIONS = 20
 
 # When the planner is out of moves but the gates still fail, the OVERSEER steps in to diagnose and
 # fix (run the tests, repair the code) rather than letting the project stall. Bounded (L6): after
-# this many overseer interventions with the gates still unmet, escalate to the user.
-MAX_OVERSEER_INTERVENTIONS = 3
+# this many overseer interventions with the gates still unmet, the project is abandoned (logged).
+# Operator-tunable via AGENTIC_MAX_OVERSEER_INTERVENTIONS: the bound must exist (an unbounded
+# Fable-5 intervention loop eats the weekly window), but the NUMBER belongs to the operator —
+# 10 Jul: v3 Slice 2 was abandoned after its 3 interventions each fixed a REAL adversarial
+# finding (torn-line log corruption, duplicate-task-id identity corruption); productive
+# hardening killed by an under-budgeted default. Floor of 1 so the ladder always terminates.
+MAX_OVERSEER_INTERVENTIONS = max(1, int(os.environ.get("AGENTIC_MAX_OVERSEER_INTERVENTIONS", "3")))
 
 # Heartbeat: ping a status summary at least this often, regardless of progress.
 HEARTBEAT_SECONDS = 12 * 3600

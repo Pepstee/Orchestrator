@@ -86,3 +86,12 @@ def test_slice_tasks_are_plan_typed_with_charter_criteria():
         t = build_slice_task(n)
         assert t.task_type == "plan" and t.project == PROJECT
         assert t.acceptance_criteria == list(SLICES[n][1])
+
+
+def test_each_slice_opens_a_fresh_era():
+    # payload mode='rescope' resets the planner + overseer-intervention budgets per slice
+    # (daemon _era_counts) and deliberately revives a parked project past its abandonment
+    # watermark — the 10 Jul lesson: Slice 2 inherited Slice 1's spent ledger and was
+    # abandoned mid-hardening after three PRODUCTIVE interventions.
+    for n in SLICES:
+        assert build_slice_task(n).payload.get("mode") == "rescope", f"slice {n}"

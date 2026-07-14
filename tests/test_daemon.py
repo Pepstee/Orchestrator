@@ -91,3 +91,20 @@ def test_zero_deadline_means_unbounded(tmp_path):
     from control.daemon import deadline_should_stop
     assert not deadline_should_stop(tmp_path, {}, boot=0.0, hours=0, now=1e12)
     assert not (tmp_path / "STOP").exists()
+
+
+def test_overseer_intervention_cap_is_env_tunable(monkeypatch):
+    # The bound must exist (L6) but the number belongs to the operator (10 Jul: v3 abandoned
+    # after 3 PRODUCTIVE interventions). Floor of 1 keeps the ladder terminating.
+    import importlib
+
+    import control.daemon as daemon_module
+    monkeypatch.setenv("AGENTIC_MAX_OVERSEER_INTERVENTIONS", "7")
+    importlib.reload(daemon_module)
+    assert daemon_module.MAX_OVERSEER_INTERVENTIONS == 7
+    monkeypatch.setenv("AGENTIC_MAX_OVERSEER_INTERVENTIONS", "0")
+    importlib.reload(daemon_module)
+    assert daemon_module.MAX_OVERSEER_INTERVENTIONS == 1
+    monkeypatch.delenv("AGENTIC_MAX_OVERSEER_INTERVENTIONS")
+    importlib.reload(daemon_module)
+    assert daemon_module.MAX_OVERSEER_INTERVENTIONS == 3
