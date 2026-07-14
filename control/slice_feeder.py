@@ -33,7 +33,7 @@ from infra.notify import notify
 
 PROJECT = "orchestrator-v3"
 POLL_SECONDS = 60.0
-FINAL_SLICE = 10
+FINAL_SLICE = 16   # 2-10: the build charter (16 §3); 11-16: the GIGA capability wave (planning/18)
 
 # Slices 2-10, verbatim from the charter's table (16 §3), with the ratified pure-Python ME shape
 # (ports + manifests + fail-closed loader — spec 17 ME-1..3) folded into slices 2-3 where it is
@@ -113,6 +113,61 @@ SLICES: dict[int, tuple[str, list[str]]] = {
           "notifications plus a signals/queries surface reachable over SSH or Tailscale",
           "stop and confirm actions work from a phone browser",
           "the GUI reads durable state and acts only through channels the daemon already ingests",
+          "ruff + pytest + lint-imports green"]),
+    # ── The GIGA capability wave (post-P0; docs/planning/18) — evals are the hub ──────────
+    11: ("Build orchestrator-v3 Slice 11 — the eval harness (law A2 made ACTIVE) — in "
+         "projects/orchestrator-v3/. Behaviour evals as a load-bearing organ, not a deferred law.",
+         ["an EvalPort module: eval cases as data (input, rubric, grader model), results in a "
+          "durable eval store (append-only, replayable)",
+          "LLM-graded rubric evals run as a gate tier: a behaviour change (prompt, agent, model) "
+          "cannot land without a non-regressing eval run — proven by a test that regresses a "
+          "rubric score and asserts refusal",
+          "the selfdev promotion pipeline consults the eval store: a candidate with regressed "
+          "evals is refused promotion (the ME-5 hook)",
+          "execution-shaped validation enforced: a validate task whose instructions forbid "
+          "execution FAILS the gate (the 12 Jul review-only gaming class, closed by test)",
+          "ruff + pytest + lint-imports green"]),
+    12: ("Build orchestrator-v3 Slice 12 — eval-driven model routing — in projects/orchestrator-v3/. "
+         "Port v1's benchmark harness (docs/planning/port/v1); routing is earned by receipts.",
+         ["a benchmark module runs a fixed prompt set across configured provider/model pairs and "
+          "writes scores to the eval store",
+          "registry model assignments carry a benchmark reference; a change to an agent's model "
+          "without an eval-store receipt fails an architecture test",
+          "per-agent env overrides remain the documented outage lever (reversible, receipt-exempt)",
+          "ruff + pytest + lint-imports green"]),
+    13: ("Build orchestrator-v3 Slice 13 — the feedback distiller (the operator's taste becomes "
+         "regression tests) — in projects/orchestrator-v3/.",
+         ["operator corrections are captured as KB entries: Telegram vetoes/instructions, "
+          "constitution-window rejections, manual requeues, fence quarantines",
+          "each captured correction generates a CANDIDATE eval case (promoted to active via the "
+          "curated gate, like PA rules — never autonomously)",
+          "a test proves the loop: a simulated operator correction yields a KB entry and a "
+          "candidate eval case",
+          "ruff + pytest + lint-imports green"]),
+    14: ("Build orchestrator-v3 Slice 14 — the personal knowledge corpus (life-shaped memory, "
+         "not code-shaped) — in projects/orchestrator-v3/.",
+         ["the KB MemoryPort accepts external corpora: operator-configured directories of notes, "
+          "journal, research, transcripts, ingested as manifest-gated connector modules",
+          "planner and overseer context includes recall() over the personal corpus, budget-capped "
+          "(context minimalism: smallest high-signal set — the 500k-token session lesson)",
+          "ingestion is read-only over the source directories (an architecture test proves no "
+          "write path into the corpus)",
+          "ruff + pytest + lint-imports green"]),
+    15: ("Build orchestrator-v3 Slice 15 — the scheduler and morning briefing (the AI-OS surface) "
+         "— in projects/orchestrator-v3/. The scheduling/ seam earns its existence.",
+         ["a SchedulerPort module: cron-style schedule data drives task creation through the "
+          "normal inbox channel (never direct log writes)",
+          "a daily briefing composes from the KB + ledger: what changed, why it matters, "
+          "suggested actions — delivered via notify and the GUI",
+          "suggested actions execute one-tap through EXISTING channels (confirm/inbox/focus) — "
+          "an architecture test proves the briefing surface cannot bypass a law",
+          "ruff + pytest + lint-imports green"]),
+    16: ("Build orchestrator-v3 Slice 16 — leverage metrics (measure the thesis) — in "
+         "projects/orchestrator-v3/.",
+         ["the scorecard computes operator-touches-per-certification (every operator channel "
+          "event counted: confirms, vetoes, Telegram directives, manual requeues)",
+          "window-cost per project derives from focus_changed events and per-call usage rows",
+          "both metrics render in the GUI and the briefing; the eval store trends alongside",
           "ruff + pytest + lint-imports green"]),
 }
 

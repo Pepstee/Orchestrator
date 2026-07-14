@@ -30,12 +30,21 @@ def _seed_done_task(repo: TaskRepository, tid: str = "s1") -> None:
     repo.apply(tid, Event.COMPLETE)
 
 
-def test_all_ten_slices_are_defined_and_gated():
+def test_all_slices_are_defined_and_gated():
+    # 2-10: the build charter (16 §3); 11-16: the GIGA capability wave (planning/18).
     assert set(SLICES) == set(range(2, FINAL_SLICE + 1))
     for n, (goal, accept) in SLICES.items():
         assert PROJECT in goal or "orchestrator-v3" in goal
         assert len(accept) >= 4, f"slice {n} under-specified"
         assert any("green" in a for a in accept), f"slice {n} missing the gates criterion"
+
+
+def test_capability_wave_is_post_p0():
+    # The wave (11+) must never be fed before the P0 slice (9) and GUI (10) certify: the feeder
+    # requires certs >= n-1 before feeding slice n, so ordering is structural, not aspirational.
+    assert FINAL_SLICE == 16
+    for n in range(11, FINAL_SLICE + 1):
+        assert n in SLICES
 
 
 def test_not_due_without_certification(tmp_path: Path):
