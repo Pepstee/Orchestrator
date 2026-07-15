@@ -12,6 +12,7 @@ import os
 import subprocess
 import uuid
 from dataclasses import dataclass
+from typing import Callable
 
 
 def _default_timeout() -> int:
@@ -218,3 +219,30 @@ def call_llm(
             _fail_provider("codex", proc.returncode, raw)
         return _parse_codex_output(proc.stdout)
     raise ValueError(f"unknown provider {provider!r}")
+
+
+def call_llm_ladder(
+    specs: list[dict[str, str]],
+    prompt: str,
+    *,
+    call: Callable[..., LLMResult] = call_llm,
+    **kwargs,
+) -> tuple[LLMResult, int]:
+    """Try each {'provider','model'} spec in ``specs`` in order. On a RateLimited failure, step DOWN
+    to the next rung; return ``(result, rung_index)`` for the FIRST rung that answers. Only when
+    EVERY rung is rate-limited does the last RateLimited propagate (the caller then requeues/backs
+    off exactly as before — one taxonomy, L1). A NON-RateLimited error (auth, hard CLI, unknown
+    provider) propagates IMMEDIATELY from the rung that raised it: it is deterministic for that rung,
+    and silently stepping past it would mask a real fault. ``call`` is injected for testability and
+    so the caller's provider/session wiring is reused unchanged. An empty ladder is a programming
+    error."""
+    if not specs:
+        raise ValueError("call_llm_ladder: empty model ladder")
+    last: RateLimited | None = None
+    for i, spec in enumerate(specs):
+        try:
+            return call(spec["provider"], spec["model"], prompt, **kwargs), i
+        except RateLimited as exc:
+            last = exc
+    assert last is not None   # non-empty ladder with no return means every rung raised RateLimited
+    raise last

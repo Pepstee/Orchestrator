@@ -174,3 +174,48 @@ def test_observe_reprioritise_directive_spawns_control_task(tmp_path):
     assert len(controls) == 1
     p = controls[0]["payload"]
     assert p["directive"] == "reprioritise" and p["project"] == "urgent" and p["priority"] == 10
+
+
+# --- model-fallback ladder: the overseer survives Fable's limit by stepping to Opus ---
+
+def _ladder_stub(succeed_on):
+    """RateLimits every rung until it sees the target (provider, model), then succeeds — drives the
+    overseer onto a specific ladder rung."""
+    from infra.llm import RateLimited
+    seen = []
+
+    def call(provider, model, prompt, *, system=None, cwd=None, session_id=None, resume=False, **kw):
+        seen.append((provider, model))
+        if (provider, model) == succeed_on:
+            return LLMResult(text='{"journal": "still steering"}', cost_usd=0.0,
+                             model=model, session_id=session_id or "")
+        raise RateLimited(f"{model} usage limit")
+
+    return call, seen
+
+
+def test_observe_falls_back_to_opus_on_fable_limit(tmp_path):
+    call, seen = _ladder_stub(("claude", "opus"))
+    res = run(_meta_payload("observe"), call=call, state_root=str(tmp_path))
+    assert res.ok                                        # Fable limited, Opus kept it alive
+    assert res.metadata["rung"] == 1
+    assert res.metadata["served_by"] == "claude:opus"
+    assert seen[0] == ("claude", "claude-fable-5")       # tried Fable first
+
+
+def test_observe_pulse_fails_only_when_every_rung_is_limited(tmp_path):
+    from infra.llm import RateLimited
+
+    def call(*a, **k):
+        raise RateLimited("weekly all-models limit")
+
+    res = run(_meta_payload("observe"), call=call, state_root=str(tmp_path))
+    assert not res.ok and "overseer observe failed" in res.summary
+
+
+def test_observe_stays_on_fable_when_healthy(tmp_path):
+    call, seen = _ladder_stub(("claude", "claude-fable-5"))
+    res = run(_meta_payload("observe"), call=call, state_root=str(tmp_path))
+    assert res.ok and res.metadata["rung"] == 0
+    assert res.metadata["served_by"] == "claude:claude-fable-5"
+    assert seen == [("claude", "claude-fable-5")]        # never stepped down

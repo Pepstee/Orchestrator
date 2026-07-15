@@ -56,6 +56,28 @@ AGENT_MODELS: dict[str, dict[str, str]] = {
     "researcher":   {"provider": "claude", "model": "sonnet"},
 }
 
+# Ordered per-agent MODEL-FALLBACK ladders (resilience: the overseer must not go dark when Fable's
+# quota is exhausted while other Claude models are still up). On a provider RateLimited failure the
+# caller steps DOWN this ladder and retries on the next rung; only a fully-exhausted ladder backs
+# off (requeue behaviour is unchanged). Rung 0 is the AGENT_MODELS primary.
+#
+# Overseer: Fable 5 (primary) -> Opus 4.8. This SELF-CLASSIFIES a limit type the CLI never
+# distinguishes for us (every limit surfaces as an opaque `usage/rate limit` or a bare non-zero
+# exit — verified across the whole event log): a Fable-ONLY limit leaves Opus available, so the
+# pulse lands on Opus (the "downgrade Fable->Opus on the Fable limit" behaviour); a 5-hour or
+# weekly ALL-models limit blocks Opus too, so the ladder is exhausted and the pulse backs off and
+# retries after the reset. Because every pulse restarts at Fable, it auto-returns the instant the
+# Fable limit resets — no lock-in.
+#
+# Sol is deliberately NOT a fallback rung: it runs as a separate, lower-cadence, independent
+# cross-provider SECOND OPINION on the overseer's judgement (see agents.overseer second-opinion
+# pass), not as a failover executive.
+AGENT_FALLBACKS: dict[str, list[dict[str, str]]] = {
+    "overseer": [
+        {"provider": "claude", "model": "opus"},   # same-account catch for a Fable-only limit
+    ],
+}
+
 
 def model_for(agent: str) -> dict[str, str]:
     """The canonical model for an agent, with a reversible per-agent env override for provider
@@ -72,3 +94,16 @@ def model_for(agent: str) -> dict[str, str]:
         provider, model = override.split(":", 1)
         return {"provider": provider.strip(), "model": model.strip()}
     return spec
+
+
+def model_ladder(agent: str) -> list[dict[str, str]]:
+    """The ordered model-fallback ladder for an agent: the AGENT_MODELS primary (rung 0) followed by
+    any AGENT_FALLBACKS. A single-model override (AGENTIC_<AGENT>="provider:model") PINS the agent to
+    that one model and DISABLES the ladder — the manual outage lever stays authoritative (e.g.
+    AGENTIC_OVERSEER="claude:opus" forces Opus with no further fallback). Raises loudly on an unknown
+    agent (via model_for)."""
+    override = os.environ.get(f"AGENTIC_{agent.upper()}", "")
+    if ":" in override:
+        provider, model = override.split(":", 1)
+        return [{"provider": provider.strip(), "model": model.strip()}]
+    return [model_for(agent), *(dict(rung) for rung in AGENT_FALLBACKS.get(agent, []))]

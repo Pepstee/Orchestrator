@@ -28,7 +28,7 @@ from typing import Callable
 from agents.common import safe_main
 from core.models import AgentResult, Task
 from infra.atomic_io import write_text_atomic
-from infra.llm import LLMResult, call_llm
+from infra.llm import LLMResult, call_llm, call_llm_ladder
 from infra.notify import notify
 from infra.workspace import task_workdir
 from memory.overseer import (
@@ -41,7 +41,7 @@ from memory.overseer import (
     save_beliefs,
     save_handoff_extra,
 )
-from registry.agents import model_for
+from registry.agents import model_ladder
 
 SYSTEM_PROMPT = (
     "You are the Overseer: the operator's trusted agent with full command over THIS PROJECT (never "
@@ -135,18 +135,38 @@ def _default_state_root() -> Path:
     return Path(__file__).resolve().parents[1] / "state"
 
 
+def _served_transition(mind: Path, rung: int) -> bool:
+    """True when the served ladder rung CHANGED since the last pulse — so we ping the operator when
+    a fallback ENGAGES (Fable -> Opus) or CLEARS (back to Fable), not on every pulse in between.
+    Persists the last rung in the mind dir via the sanctioned atomic writer (L7)."""
+    marker = mind / "last_rung.txt"
+    try:
+        prev = int(marker.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        prev = 0
+    if rung == prev:
+        return False
+    try:
+        mind.mkdir(parents=True, exist_ok=True)
+        write_text_atomic(marker, str(rung))
+    except OSError:
+        pass
+    return True
+
+
 def _run_intervene(task: Task, call: LLMCall, projects_root: str | None,
                    mind: Path | None = None) -> AgentResult:
     instruction = task.title
     context = str(task.payload.get("context", "")) if isinstance(task.payload, dict) else ""
-    spec = model_for("overseer")
+    ladder = model_ladder("overseer")
     project_dir = task_workdir(task, projects_root)   # its worktree if isolated, else the project tree
     try:
-        res = call(spec["provider"], spec["model"], build_prompt(instruction, context),
-                   system=frame_system(SYSTEM_PROMPT), cwd=str(project_dir))
+        res, rung = call_llm_ladder(ladder, build_prompt(instruction, context), call=call,
+                                    system=frame_system(SYSTEM_PROMPT), cwd=str(project_dir))
     except Exception as exc:
         return AgentResult(ok=False, summary="overseer call failed", cause=f"{type(exc).__name__}: {exc}")
 
+    served = f"{ladder[rung]['provider']}:{ladder[rung]['model']}"
     directive = parse_directive(res.text)
     first_line = res.text.strip().splitlines()[0][:200] if res.text.strip() else "acted on instruction"
     action = str(directive.get("action") or first_line)
@@ -156,9 +176,11 @@ def _run_intervene(task: Task, call: LLMCall, projects_root: str | None,
                             title=f"Re-validate after overseer: {instruction}"[:200],
                             task_type="validate", project=task.project).to_dict())
     append_journal(mind or default_mind_dir(),
-                   {"mode": "intervene", "project": task.project, "note": action[:500]})
+                   {"mode": "intervene", "project": task.project, "note": action[:500],
+                    "rung": rung, "served_by": served})
     return AgentResult(ok=True, summary=f"overseer: {action}"[:200], spawned_tasks=spawned,
-                       metadata={"cost_usd": res.cost_usd, "model": res.model or spec["model"]})
+                       metadata={"cost_usd": res.cost_usd, "model": res.model or ladder[rung]["model"],
+                                 "rung": rung, "served_by": served})
 
 
 def _session_args(task: Task) -> dict:
@@ -231,7 +253,7 @@ def _reprioritise_directives(text: str) -> list[dict]:
 def _run_observe(task: Task, call: LLMCall, mind: Path | None = None) -> AgentResult:
     mind = mind or default_mind_dir()
     context = str(task.payload.get("context", "")) if isinstance(task.payload, dict) else ""
-    spec = model_for("overseer")
+    ladder = model_ladder("overseer")
     recollection = mind_context(mind)
     prompt = (
         (f"YOUR DURABLE MIND (written by you, for you — your canonical memory):\n{recollection}\n\n"
@@ -242,30 +264,40 @@ def _run_observe(task: Task, call: LLMCall, mind: Path | None = None) -> AgentRe
           "single JSON object (journal required)."
     )
     try:
-        res = call(spec["provider"], spec["model"], prompt, system=frame_system(OBSERVE_SYSTEM), **_session_args(task))
+        res, rung = call_llm_ladder(ladder, prompt, call=call,
+                                    system=frame_system(OBSERVE_SYSTEM), **_session_args(task))
     except Exception as exc:
         # Even a failed pulse leaves a trace — the thread of thought must have no silent gaps.
         append_journal(mind, {"mode": "observe", "note": f"pulse failed: {type(exc).__name__}: {exc}"[:500]})
         return AgentResult(ok=False, summary="overseer observe failed", cause=f"{type(exc).__name__}: {exc}")
+    served = f"{ladder[rung]['provider']}:{ladder[rung]['model']}"
+    fell_back = rung > 0
+    transitioned = _served_transition(mind, rung)   # engaged a fallback, or recovered to Fable
+    status = (f" [Fable rate-limited — running on {served}]" if fell_back
+              else " [recovered — back on Fable]" if transitioned else "")
     spawned = (_enqueue_directives(res.text) + _abandon_directives(res.text)
                + _reprioritise_directives(res.text))
     data = _extract_json_object(res.text)
     first = res.text.strip().splitlines()[0][:200] if res.text.strip() else "observed"
     note = str(data.get("journal") or "").strip() or first
-    append_journal(mind, {"mode": "observe", "note": note[:1500],
-                          "directed": len(spawned), "session": res.session_id})
-    if spawned:
-        # A directive-bearing pulse is a notable steering event: tell the operator in the
-        # overseer's own words. (12 Jun gap: the phone heard a project's abandonment but never
-        # the overseer's resurrection of it two minutes later — good news must notify too.)
-        notify("Overseer", note[:400])
+    append_journal(mind, {"mode": "observe", "note": (note + status)[:1500],
+                          "directed": len(spawned), "rung": rung, "served_by": served,
+                          "session": res.session_id})
+    if spawned or transitioned:
+        # A directive-bearing pulse — or a change in which model is carrying the overseer — is a
+        # notable steering event: tell the operator in the overseer's own words. (12 Jun gap: the
+        # phone heard a project's abandonment but never its resurrection two minutes later — good
+        # news must notify too.)
+        notify("Overseer", (note + status)[:400])
     beliefs_update = str(data.get("beliefs_update") or "").strip()
     if beliefs_update:
         save_beliefs(mind, beliefs_update)   # whole-file replacement, length-capped (DG-8)
-    summary = f"overseer observed: {first}" + (f"; directed {len(spawned)} action(s)" if spawned else "")
+    summary = (f"overseer observed: {first}"
+               + (f"; directed {len(spawned)} action(s)" if spawned else "") + status)
     return AgentResult(ok=True, summary=summary[:200], spawned_tasks=spawned,
                        metadata={"cost_usd": res.cost_usd, "session_id": res.session_id,
-                                 "beliefs_updated": bool(beliefs_update)})
+                                 "beliefs_updated": bool(beliefs_update), "rung": rung,
+                                 "served_by": served})
 
 
 def _run_operator_message(task: Task, call: LLMCall, mind: Path | None = None,
@@ -277,7 +309,7 @@ def _run_operator_message(task: Task, call: LLMCall, mind: Path | None = None,
     p = task.payload if isinstance(task.payload, dict) else {}
     message = str(p.get("message", "")).strip()
     context = str(p.get("context", ""))
-    spec = model_for("overseer")
+    ladder = model_ladder("overseer")
     recollection = mind_context(mind)
     prompt = (
         (f"YOUR DURABLE MIND (written by you, for you — your canonical memory):\n{recollection}\n\n"
@@ -288,8 +320,8 @@ def _run_operator_message(task: Task, call: LLMCall, mind: Path | None = None,
           "(reply and journal required)."
     )
     try:
-        res = call(spec["provider"], spec["model"], prompt,
-                   system=frame_system(OPERATOR_CHAT_SYSTEM), **_session_args(task))
+        res, rung = call_llm_ladder(ladder, prompt, call=call,
+                                    system=frame_system(OPERATOR_CHAT_SYSTEM), **_session_args(task))
     except Exception as exc:
         # He is waiting on a reply that will never come — say so, and leave the trace.
         append_journal(mind, {"mode": "operator_message",
@@ -304,15 +336,18 @@ def _run_operator_message(task: Task, call: LLMCall, mind: Path | None = None,
     spawned = (_enqueue_directives(res.text) + _abandon_directives(res.text)
                + _reprioritise_directives(res.text))
     note = str(data.get("journal") or "").strip() or f"replied: {reply[:200]}"
+    served = f"{ladder[rung]['provider']}:{ladder[rung]['model']}"
     append_journal(mind, {"mode": "operator_message",
                           "note": f"operator said: {message[:200]} | {note}"[:1500],
-                          "directed": len(spawned), "session": res.session_id})
+                          "directed": len(spawned), "rung": rung, "served_by": served,
+                          "session": res.session_id})
     notifier("Overseer", reply[:1500], verbatim=True)   # his own words, not the haiku rewrite
     return AgentResult(ok=True,
                        summary=(f"replied to operator: {reply[:120]}"
                                 + (f"; directed {len(spawned)} action(s)" if spawned else ""))[:200],
                        spawned_tasks=spawned,
-                       metadata={"cost_usd": res.cost_usd, "session_id": res.session_id})
+                       metadata={"cost_usd": res.cost_usd, "session_id": res.session_id,
+                                 "rung": rung, "served_by": served})
 
 
 def _run_succession(task: Task, call: LLMCall, state_root: Path,
@@ -320,7 +355,7 @@ def _run_succession(task: Task, call: LLMCall, state_root: Path,
     context = str(task.payload.get("context", "")) if isinstance(task.payload, dict) else ""
     extra_path = state_root / "handoff_extra.md"
     handoff_path = state_root / "handoff_latest.md"
-    spec = model_for("overseer")
+    ladder = model_ladder("overseer")
     base = compose_handoff_prompt(load_handoff_extra(extra_path))
     prompt = (
         f"{base}\n\nCurrent system state to capture:\n{context}\n\n"
@@ -328,7 +363,7 @@ def _run_succession(task: Task, call: LLMCall, state_root: Path,
         '"improved_extra": "<an improved EXTRA refinements section, or empty to keep the current one>"}'
     )
     try:
-        res = call(spec["provider"], spec["model"], prompt, system=frame_system(SUCCESSION_SYSTEM), **_session_args(task))
+        res, rung = call_llm_ladder(ladder, prompt, call=call, system=frame_system(SUCCESSION_SYSTEM), **_session_args(task))
     except Exception as exc:
         return AgentResult(ok=False, summary="overseer succession failed", cause=f"{type(exc).__name__}: {exc}")
 
@@ -350,7 +385,7 @@ def _run_succession(task: Task, call: LLMCall, state_root: Path,
                        summary=f"wrote succession handoff ({len(handoff)} chars)"
                                + ("; improved EXTRA" if improved else ""),
                        metadata={"cost_usd": res.cost_usd, "session_id": res.session_id,
-                                 "improved_extra": bool(improved)})
+                                 "improved_extra": bool(improved), "rung": rung})
 
 
 def run(payload: dict, call: LLMCall = call_llm, projects_root: str | None = None,

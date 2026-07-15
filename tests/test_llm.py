@@ -170,3 +170,61 @@ def test_default_timeout_is_env_tunable(monkeypatch):
     assert _default_timeout() == 60, "floor prevents an absurdly small timeout"
     monkeypatch.setenv("AGENTIC_LLM_TIMEOUT", "nonsense")
     assert _default_timeout() == 1500
+
+
+# --- the model-fallback ladder: step down on RateLimited, self-classifying the limit type ---
+from infra.llm import LLMResult, call_llm_ladder
+
+
+def test_ladder_returns_first_success_at_rung_zero():
+    calls = []
+
+    def call(provider, model, prompt, **kw):
+        calls.append((provider, model))
+        return LLMResult(text="ok", cost_usd=0.0, model=model)
+
+    res, rung = call_llm_ladder([{"provider": "claude", "model": "fable"},
+                                 {"provider": "claude", "model": "opus"}], "hi", call=call)
+    assert res.text == "ok" and rung == 0
+    assert calls == [("claude", "fable")]   # never tried the lower rung
+
+
+def test_ladder_steps_down_to_opus_on_fable_limit():
+    seq = [RateLimited("fable limit"), None]
+
+    def call(provider, model, prompt, **kw):
+        exc = seq.pop(0)
+        if exc:
+            raise exc
+        return LLMResult(text=f"served by {model}", cost_usd=0.0, model=model)
+
+    res, rung = call_llm_ladder([{"provider": "claude", "model": "fable"},
+                                 {"provider": "claude", "model": "opus"}], "hi", call=call)
+    assert rung == 1 and "opus" in res.text
+
+
+def test_ladder_exhausted_reraises_last_rate_limit():
+    def call(provider, model, prompt, **kw):
+        raise RateLimited(f"{model} limited")
+
+    with pytest.raises(RateLimited):
+        call_llm_ladder([{"provider": "claude", "model": "fable"},
+                         {"provider": "claude", "model": "opus"}], "hi", call=call)
+
+
+def test_ladder_does_not_swallow_non_rate_limit_errors():
+    calls = []
+
+    def call(provider, model, prompt, **kw):
+        calls.append(model)
+        raise RuntimeError("claude auth error")
+
+    with pytest.raises(RuntimeError):
+        call_llm_ladder([{"provider": "claude", "model": "fable"},
+                         {"provider": "claude", "model": "opus"}], "hi", call=call)
+    assert calls == ["fable"]   # stopped at the rung that raised; never stepped down
+
+
+def test_ladder_empty_is_a_programming_error():
+    with pytest.raises(ValueError):
+        call_llm_ladder([], "hi")
