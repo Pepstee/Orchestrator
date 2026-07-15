@@ -40,11 +40,25 @@ def test_all_slices_are_defined_and_gated():
 
 
 def test_capability_wave_is_post_p0():
-    # The wave (11+) must never be fed before the P0 slice (9) and GUI (10) certify: the feeder
-    # requires certs >= n-1 before feeding slice n, so ordering is structural, not aspirational.
-    assert FINAL_SLICE == 16
+    # Everything past the charter (11+) must never be fed before the P0 slice (9) and GUI (10)
+    # certify: the feeder requires certs >= n-1 before feeding slice n — structural ordering.
+    assert FINAL_SLICE == 26
     for n in range(11, FINAL_SLICE + 1):
         assert n in SLICES
+
+
+def test_programme_encodes_the_ratified_infrastructure():
+    # Bucket one (planning/17): containers, broker, Theseus, resurrection — ratified 8 Jul,
+    # encoded 15 Jul; knowledge graph promoted to load-bearing slice 13 (operator, 15 Jul).
+    joined = {n: (SLICES[n][0] + " " + " ".join(SLICES[n][1])).lower() for n in SLICES}
+    assert "graph" in joined[13] and "fail-closed" in joined[13] and "receipt" in joined[13]
+    assert "freshness" in joined[13], "an unenforced graph is a wish — freshness must be a red check"
+    assert "container" in joined[18] and "manifest" in joined[18]
+    assert "broker" in joined[19] and "metering" in joined[19]
+    assert "candidate" in joined[20] and "eval non-regression" in joined[20]
+    assert "rehydration" in joined[21]
+    assert "injection" in joined[22]
+    assert "injection" in joined[15], "the corpus slice must carry the injection drill from day one"
 
 
 def test_not_due_without_certification(tmp_path: Path):

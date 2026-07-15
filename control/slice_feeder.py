@@ -16,7 +16,7 @@ inbox are both durable and idempotent):
 
     nohup python3 -m control.slice_feeder > slice_feeder.log 2>&1 &
 
-Stops by itself after feeding Slice 10, or with the repo-root STOP sentinel.
+Stops by itself after feeding the final slice, or with the repo-root STOP sentinel.
 """
 from __future__ import annotations
 
@@ -33,7 +33,10 @@ from infra.notify import notify
 
 PROJECT = "orchestrator-v3"
 POLL_SECONDS = 60.0
-FINAL_SLICE = 16   # 2-10: the build charter (16 §3); 11-16: the GIGA capability wave (planning/18)
+FINAL_SLICE = 26   # 2-10: build charter (16 §3); 11-17: GIGA wave incl. the load-bearing
+                   # knowledge graph at 13 (planning/18); 18-21: ratified ME infrastructure
+                   # (planning/17 — containers, broker, Theseus, resurrection); 22-26:
+                   # vision-gap closure (planning/18 addendum)
 
 # Slices 2-10, verbatim from the charter's table (16 §3), with the ratified pure-Python ME shape
 # (ports + manifests + fail-closed loader — spec 17 ME-1..3) folded into slices 2-3 where it is
@@ -138,7 +141,22 @@ SLICES: dict[int, tuple[str, list[str]]] = {
           "without an eval-store receipt fails an architecture test",
           "per-agent env overrides remain the documented outage lever (reversible, receipt-exempt)",
           "ruff + pytest + lint-imports green"]),
-    13: ("Build orchestrator-v3 Slice 13 — the feedback distiller (the operator's taste becomes "
+    13: ("Build orchestrator-v3 Slice 13 — the knowledge graph, LOAD-BEARING and ENFORCED — in "
+         "projects/orchestrator-v3/. A graph nobody is forced to consult is a wish (operator-"
+         "ratified 15 Jul: crucial, and enforcing its use is equally important).",
+         ["a graph module builds a typed, durable, incrementally-updated graph over the code "
+          "(modules, functions, imports), KB entries, and ledger entities (projects, tasks); "
+          "corpus documents join at Slice 15",
+          "ENFORCED freshness: worktree merges and KB writes trigger incremental graph updates; "
+          "the boot self-test asserts graph freshness against HEAD — a stale graph is a red check",
+          "ENFORCED consultation (fail-closed, the DV-2 pattern): planner and overseer context "
+          "assembly queries the graph neighbourhood of the goal and records a graph-receipt; a "
+          "plan produced without a graph query is refused at the seam — proven by a test that "
+          "disables the graph and asserts planning refuses",
+          "graph excerpts enter prompts budget-capped and as quoted DATA, never instructions "
+          "(context minimalism + the injection posture)",
+          "ruff + pytest + lint-imports green"]),
+    14: ("Build orchestrator-v3 Slice 14 — the feedback distiller (the operator's taste becomes "
          "regression tests) — in projects/orchestrator-v3/.",
          ["operator corrections are captured as KB entries: Telegram vetoes/instructions, "
           "constitution-window rejections, manual requeues, fence quarantines",
@@ -147,16 +165,19 @@ SLICES: dict[int, tuple[str, list[str]]] = {
           "a test proves the loop: a simulated operator correction yields a KB entry and a "
           "candidate eval case",
           "ruff + pytest + lint-imports green"]),
-    14: ("Build orchestrator-v3 Slice 14 — the personal knowledge corpus (life-shaped memory, "
+    15: ("Build orchestrator-v3 Slice 15 — the personal knowledge corpus (life-shaped memory, "
          "not code-shaped) — in projects/orchestrator-v3/.",
          ["the KB MemoryPort accepts external corpora: operator-configured directories of notes, "
           "journal, research, transcripts, ingested as manifest-gated connector modules",
           "planner and overseer context includes recall() over the personal corpus, budget-capped "
           "(context minimalism: smallest high-signal set — the 500k-token session lesson)",
+          "corpus content enters context as quoted DATA, never instructions: an injection drill "
+          "proves a hostile document with embedded instructions cannot alter a plan or spawn a "
+          "task (the Slice-22 posture applied at this surface from day one)",
           "ingestion is read-only over the source directories (an architecture test proves no "
           "write path into the corpus)",
           "ruff + pytest + lint-imports green"]),
-    15: ("Build orchestrator-v3 Slice 15 — the scheduler and morning briefing (the AI-OS surface) "
+    16: ("Build orchestrator-v3 Slice 16 — the scheduler and morning briefing (the AI-OS surface) "
          "— in projects/orchestrator-v3/. The scheduling/ seam earns its existence.",
          ["a SchedulerPort module: cron-style schedule data drives task creation through the "
           "normal inbox channel (never direct log writes)",
@@ -165,12 +186,107 @@ SLICES: dict[int, tuple[str, list[str]]] = {
           "suggested actions execute one-tap through EXISTING channels (confirm/inbox/focus) — "
           "an architecture test proves the briefing surface cannot bypass a law",
           "ruff + pytest + lint-imports green"]),
-    16: ("Build orchestrator-v3 Slice 16 — leverage metrics (measure the thesis) — in "
+    17: ("Build orchestrator-v3 Slice 17 — leverage metrics (measure the thesis) — in "
          "projects/orchestrator-v3/.",
          ["the scorecard computes operator-touches-per-certification (every operator channel "
           "event counted: confirms, vetoes, Telegram directives, manual requeues)",
           "window-cost per project derives from focus_changed events and per-call usage rows",
           "both metrics render in the GUI and the briefing; the eval store trends alongside",
+          "ruff + pytest + lint-imports green"]),
+    # ── 17-20: the ratified ME infrastructure (planning/17 §5-§7) — bucket one ────────────
+    18: ("Build orchestrator-v3 Slice 18 — the container runner (ME-4) — in "
+         "projects/orchestrator-v3/. Worker agents run sandboxed; the manifest IS the sandbox.",
+         ["worker agents (implement/test/validate/research) execute in OrbStack containers whose "
+          "profiles are GENERATED from module manifests: an undeclared capability is an absent "
+          "capability (a no-network manifest yields a no-egress profile) — proven by test",
+          "the orchestrator's own tree is never mounted in a worker container — proven by a test "
+          "inspecting every generated profile (L9R made structural)",
+          "auth: a headless token (claude setup-token) is injected as a secret ONLY where the "
+          "manifest declares the llm capability; egress allowlist pinned to provider endpoints",
+          "when the container runtime is absent, fallback to uncontained execution is LOUD "
+          "(logged + notified), never silent",
+          "ruff + pytest + lint-imports green"]),
+    19: ("Build orchestrator-v3 Slice 19 — the credential broker (planning/17 §5.1 Phase 2) — in "
+         "projects/orchestrator-v3/. Containers hold nothing real; the broker is also the meter.",
+         ["containers carry a dummy token and point their CLI at a host-side broker (base-URL "
+          "override); the broker injects real auth — a test proves no generated profile contains "
+          "a real secret in broker mode",
+          "per-call metering rows (agent, task, model, tokens, wall-clock, cost) append to a "
+          "durable usage log — the instrument panel for slices 12/16",
+          "auth errors classify PERMANENT and notify once; opaque bare exits remain transient; "
+          "five identical opaque exits from one provider escalate (the codex lesson)",
+          "AIMD backpressure at the broker: rate-limit signals halve the concurrency window, "
+          "successes recover it additively — drilled by test",
+          "ruff + pytest + lint-imports green"]),
+    20: ("Build orchestrator-v3 Slice 20 — the Theseus machinery: selfdev candidate/promotion "
+         "pipeline (ME-5, DG-5) — in projects/orchestrator-v3/. The running tree is never edited.",
+         ["a selfdev module maintains a CANDIDATE checkout; an architecture test proves no code "
+          "path writes to the running tree (L9 amended: no LIVE self-modification — self-"
+          "development flows exclusively through this pipeline; PRIME check stays green)",
+          "promotion requires, IN the candidate: ruff, lint-imports, the full suite, and the "
+          "candidate's OWN boot self-test — proven by a drill that breaks a law-check in a "
+          "candidate and asserts promotion refusal",
+          "promotion requires eval non-regression against the Slice-11 store; a regressed "
+          "candidate is refused — drilled",
+          "blue-green promotion: the supervisor swaps to the candidate commit; the event log "
+          "replays (identity continuity); boot failure or a crash-storm (3 in 30 min) "
+          "auto-reverts to the last good commit — drilled",
+          "constitution-tier changes (charter/, validation/) notify the operator and wait a veto "
+          "window (default 24h, env-tunable, 0 disables) before promoting; default-allow on expiry",
+          "ruff + pytest + lint-imports green"]),
+    21: ("Build orchestrator-v3 Slice 21 — the resurrection drill (ME-6, DG-8) — in "
+         "projects/orchestrator-v3/. The guardian must be raisable, proven, not assumed.",
+         ["the overseer's session transcript is mirrored atomically after every pulse",
+          "a per-pulse diary delta lands in the KB (bounded); the KB digest is the guardian's "
+          "long-term memory — a session loss costs at most one pulse of context",
+          "the rehydration protocol (fresh session seeded from handoff + diary + status) is "
+          "exercised by a drill test: kill a synthetic session, rehydrate, assert the key facts "
+          "survive",
+          "BG-5 wedge and failed-streak alarms preserved; a failed resurrection escalates loudly",
+          "ruff + pytest + lint-imports green"]),
+    # ── 21-25: vision-gap closure (planning/18 addendum) — bucket two ─────────────────────
+    22: ("Build orchestrator-v3 Slice 22 — untrusted-input hardening — in "
+         "projects/orchestrator-v3/. Every external token is data, never instruction.",
+         ["all tool-derived and corpus-derived text entering any prompt is framed as quoted DATA "
+          "inside explicit non-instruction delimiters, in every agent path",
+          "injection drill: a hostile document with embedded instructions cannot alter a plan, "
+          "spawn a task, or change a gate — proven across planner, overseer, and researcher paths",
+          "credential-shaped strings in tool output are redacted before entering context",
+          "ruff + pytest + lint-imports green"]),
+    23: ("Build orchestrator-v3 Slice 23 — local-model tiering — in projects/orchestrator-v3/. "
+         "Cheap breadth for sub-frontier work; frontier tokens only where receipts justify them.",
+         ["the provider seam gains a local backend (Ollama-style HTTP) behind the same call_llm "
+          "contract (port of v1's llm_client concept)",
+          "a cheap tier serves classification/triage task classes, assigned via Slice-12 eval "
+          "receipts — no frontier tokens for work a receipt shows the cheap tier handles",
+          "absence of the local runtime falls back to cloud LOUDLY, never silently",
+          "ruff + pytest + lint-imports green"]),
+    24: ("Build orchestrator-v3 Slice 24 — external-world connectors, wave one (READ-ONLY) — in "
+         "projects/orchestrator-v3/. The AI-OS gains eyes; hands stay with the operator channels.",
+         ["manifest-gated READ-ONLY connector modules for calendar, email inbox, and GitHub "
+          "repos ingest into the KB via the IntakePort; an architecture test proves no write "
+          "path to any external system exists",
+          "the morning briefing (Slice 15) composes across connector data: what changed, why it "
+          "matters, suggested actions",
+          "all ACTIONS remain through existing operator channels (confirm/inbox/focus) — "
+          "connectors can never execute anything",
+          "Slice-22 injection hardening applies to all connector content — drilled",
+          "ruff + pytest + lint-imports green"]),
+    25: ("Build orchestrator-v3 Slice 25 — guardian evals — in projects/orchestrator-v3/. "
+         "The one agent with full control stops grading its own homework.",
+         ["an overseer decision eval-set: recorded ledger windows replayed as cases (goal "
+          "injections, severity calls, abandon/revive decisions) graded by rubric against "
+          "known-good outcomes",
+          "overseer handoff/EXTRA revisions are gated on non-regression of the guardian eval-set",
+          "guardian metrics (e.g. injection adoption rate) are computed from the ledger, never "
+          "self-reported",
+          "ruff + pytest + lint-imports green"]),
+    26: ("Build orchestrator-v3 Slice 26 — the portfolio ratchet (DG-4) — in "
+         "projects/orchestrator-v3/. Breadth is earned, halved on breach, never assumed.",
+         ["the focus allowance may hold N projects: N starts at 1, DOUBLES only after a clean "
+          "soak window (no breaker trips, no abandonments), HALVES immediately on breach",
+          "ratchet state is durable and operator-overridable; reserved projects are unaffected",
+          "the scorecard and briefing surface the ratchet state and per-project window-cost",
           "ruff + pytest + lint-imports green"]),
 }
 

@@ -48,3 +48,42 @@ prerequisite-cascade lesson).
 
 When v3 assumes its own development (post-cutover, ME-5), slices 11–16 transfer from v2's
 feeder to v3's own intake — the eval harness is what makes that transfer safe.
+
+---
+
+## Addendum, 15 July 2026 — the full programme (slices 13–26, operator-ordered)
+
+Gap analysis against the GIGA vision found two buckets missing from the fed programme; the
+operator ordered both encoded, and separately ratified the **knowledge graph as crucial and
+its use as ENFORCED** — promoted from deferral to load-bearing slice 13, ahead of the corpus
+and briefing so everything downstream lands in an indexed world. Acceptance detail lives in
+the feeder (single source).
+
+**Slice 13 — the knowledge graph (load-bearing, enforced):** typed graph over code + KB +
+ledger entities (corpus joins at 15); ENFORCED freshness (stale graph = red boot check) and
+ENFORCED consultation (planner/overseer context requires a graph-receipt; planning without one
+is refused at the seam — the DV-2 fail-closed pattern). "A graph nobody is forced to consult
+is a wish."
+
+**Bucket one — ratified in planning/17, now slices 18–21:**
+18 container runner (ME-4; manifests generate sandbox profiles; orchestrator tree unmounted —
+L9R made structural) · 19 credential broker (tokens never enter sandboxes; per-call metering;
+AIMD backpressure; the opaque-exit escalation rule) · 20 **the Theseus machinery** (ME-5/DG-5:
+candidate/promotion pipeline with in-candidate gates, eval non-regression via Slice 11,
+blue-green auto-revert, constitution veto window — the piece that makes unattended
+self-improvement survivable) · 21 resurrection drill (ME-6/DG-8: guardian raisable, proven).
+
+**Bucket two — vision gaps, now slices 22–26:**
+22 untrusted-input hardening (external tokens are data, never instructions; injection drills) ·
+23 local-model tiering (cheap breadth, receipt-assigned) · 24 read-only world connectors
+(calendar/email/GitHub → KB; actions stay operator-channelled; eyes before hands) ·
+25 guardian evals (the full-control agent stops grading its own homework) ·
+26 portfolio ratchet (DG-4: breadth doubles on clean soak, halves on breach).
+
+Slice 15 (personal corpus) was amended in place: the injection drill applies from day one
+(a poisoned note must never steer a plan) — safety lands with the surface, not after it.
+
+Deliberately still unplanned (recorded, not forgotten): semantic/embedding retrieval on top of
+the graph (deferred per N5 until graph+keyword recall measurably fails); write-capable world
+connectors (hands stay human until the injection posture has soaked); voice/mobile surfaces
+beyond Telegram + GUI.
