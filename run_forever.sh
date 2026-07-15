@@ -23,10 +23,18 @@ fi
 echo $$ > "$LOCK"
 trap 'rm -f "$LOCK"' EXIT
 
-# Judge runs on the REGISTRY default (openai/codex — cross-provider anti-collusion, D4).
-# Override only for a provider outage: AGENTIC_JUDGE="claude:opus" ./run_forever.sh
+# Operational defaults live HERE, not in anyone's paste buffer (15 Jul: a bare relaunch dropped
+# the judge override, silently re-arming the wedged Codex judge — and with the judge provider
+# down, the adversarial assurance rung self-skips, so slices could certify UN-PROBED).
+#
+# AGENTIC_JUDGE defaults to claude:opus while Codex auth is broken (journal: intermittent
+# stdin-exit-1 wedge). To restore the registry's cross-provider default (D4/F5) once Codex is
+# fixed: launch with AGENTIC_JUDGE=registry (any colon-less value is ignored by model_for and
+# falls through to the registry). Every value is still overridable per-launch the usual way.
 export AGENTIC_BUDGET_USD="${AGENTIC_BUDGET_USD:-1000000}"
 export AGENTIC_MAX_WORKERS="${AGENTIC_MAX_WORKERS:-20}"
+export AGENTIC_JUDGE="${AGENTIC_JUDGE:-claude:opus}"
+export AGENTIC_MAX_OVERSEER_INTERVENTIONS="${AGENTIC_MAX_OVERSEER_INTERVENTIONS:-6}"
 PY="${PYTHON:-python3}"
 
 while [ ! -f STOP ]; do
