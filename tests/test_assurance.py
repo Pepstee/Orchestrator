@@ -97,3 +97,42 @@ def test_llm_tier_error_is_non_blocking():
 def test_hardening_tiers_is_escalating_ladder():
     tiers = hardening_tiers()
     assert len(tiers) >= 3 and all(callable(t) for t in tiers)
+
+
+# ---- severity-aware convergence (14 Jul: the binary adversarial verdict made 'fully hardened'
+# unreachable — seven rounds each fixed a real finding, the adversary always had one more, and
+# the era budget turned the treadmill into an abandonment) ----
+
+def test_minor_finding_logs_but_does_not_block():
+    t = llm_tier("adversarial", "find flaws", provider="openai", model="codex",
+                 call=_llm('{"issue_found": true, "severity": "minor", '
+                           '"detail": "docstring could mention the timeout"}'))
+    r = t("/tmp")
+    assert r.passed, "a minor finding must not block certification"
+    assert "minor" in r.detail and "docstring" in r.detail
+
+
+def test_blocker_and_major_still_block():
+    for sev in ("blocker", "major"):
+        t = llm_tier("adversarial", "find flaws", provider="openai", model="codex",
+                     call=_llm('{"issue_found": true, "severity": "%s", '
+                               '"detail": "replay bricks on UTF-8 BOM"}' % sev))
+        r = t("/tmp")
+        assert not r.passed, sev
+        assert sev in r.detail
+
+
+def test_missing_severity_defaults_to_blocking():
+    # Old-format verdicts (no severity field) keep the conservative behaviour: they block.
+    t = llm_tier("adversarial", "find flaws", provider="openai", model="codex",
+                 call=_llm('{"issue_found": true, "detail": "path escape via ../"}'))
+    r = t("/tmp")
+    assert not r.passed and "major" in r.detail
+
+
+def test_unknown_severity_treated_as_major():
+    t = llm_tier("adversarial", "find flaws", provider="openai", model="codex",
+                 call=_llm('{"issue_found": true, "severity": "catastrophic-ish", '
+                           '"detail": "x"}'))
+    r = t("/tmp")
+    assert not r.passed

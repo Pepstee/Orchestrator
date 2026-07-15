@@ -65,16 +65,25 @@ def default_tiers() -> list[Tier]:
     return [lambda project_dir: run_test_gate(project_dir)]
 
 
-def _parse_hardening(text: str) -> tuple[bool, str]:
-    """Parse a hardening verdict {issue_found, detail}. Unparseable -> inconclusive (no confirmed issue)."""
+def _parse_hardening(text: str) -> tuple[bool, str, str]:
+    """Parse a hardening verdict {issue_found, severity, detail} -> (issue, severity, detail).
+
+    Severity is the convergence criterion (14 Jul lesson: seven hardening rounds each fixed a
+    real finding, then the adversary found one more — a binary verdict makes 'fully hardened'
+    unreachable, and the era budget converts an infinite treadmill into an abandonment).
+    Missing/unknown severity defaults to 'major' (conservative: blocks, as before).
+    Unparseable -> inconclusive (no confirmed issue)."""
     for line in reversed([ln.strip() for ln in text.splitlines() if ln.strip()]):
         try:
             data = json.loads(line)
         except json.JSONDecodeError:
             continue
         if isinstance(data, dict) and "issue_found" in data:
-            return bool(data["issue_found"]), str(data.get("detail", ""))[:300]
-    return False, "inconclusive (unparseable hardening verdict)"
+            sev = str(data.get("severity", "major")).strip().lower()
+            if sev not in ("blocker", "major", "minor"):
+                sev = "major"
+            return bool(data["issue_found"]), sev, str(data.get("detail", ""))[:300]
+    return False, "minor", "inconclusive (unparseable hardening verdict)"
 
 
 def llm_tier(
@@ -94,7 +103,8 @@ def llm_tier(
     def tier(project_dir: str) -> GateResult:
         prompt = (
             f"{instruction}\n\nReview the code in the current working directory. "
-            'Output ONLY a JSON line: {"issue_found": true|false, "detail": "..."}'
+            'Output ONLY a JSON line: {"issue_found": true|false, '
+            '"severity": "blocker"|"major"|"minor", "detail": "..."}'
         )
         try:
             res = call(
@@ -109,8 +119,13 @@ def llm_tier(
                 governor.charge(float(res.cost_usd))
             except Exception:
                 pass
-        issue, detail = _parse_hardening(res.text)
-        return GateResult(name, passed=not issue, detail=detail)
+        issue, severity, detail = _parse_hardening(res.text)
+        if issue and severity == "minor":
+            # Convergence: a minor finding is logged for the improvement backlog (the post-
+            # certification FOREVER-IMPROVE rounds exist for exactly this) but does not block.
+            # Certification means "no known blocking defects", not "the adversary is speechless".
+            return GateResult(name, passed=True, detail=f"[minor, logged for improvement] {detail}")
+        return GateResult(name, passed=not issue, detail=f"[{severity}] {detail}" if issue else detail)
 
     return tier
 
@@ -133,7 +148,12 @@ def hardening_tiers(governor: Any = None, call: Callable[..., Any] = call_llm) -
             "Find a CONCRETE, demonstrable defect: a specific input or scenario (edge case, malformed "
             "or hostile input, or security flaw) the code actually mishandles. Only report an issue you "
             "can concretely justify with the offending input and the wrong behaviour; if the code is "
-            "correct, report issue_found=false.",
+            "correct, report issue_found=false. Classify severity honestly: 'blocker' = the artefact is "
+            "incorrect or unsafe for its stated purpose on realistic input; 'major' = data loss, "
+            "corruption, or a security flaw reachable in plausible use; 'minor' = edge-case polish, "
+            "theoretical concerns, or hardening niceties. A minor finding is logged to the improvement "
+            "backlog and does NOT block release — reserve blocker/major for defects that genuinely "
+            "should stop a ship decision.",
             provider=jm["provider"], model=jm["model"], governor=governor, call=call,
         ),
     ]

@@ -76,6 +76,9 @@ SLICES: dict[int, tuple[str, list[str]]] = {
          "cross-provider judge wired behind the provider seam",
          "negative control proven: the gate set FAILS a deliberately-stubbed sample project and "
          "PASSES a known-good one",
+         "the adversarial/hardening rung is severity-aware: minor findings log to the improvement "
+         "backlog without blocking certification; blocker/major findings block (the 14 Jul "
+         "infinite-treadmill lesson — a binary adversarial verdict makes 'hardened' unreachable)",
          "ruff + pytest + lint-imports green"]),
     6: ("Build orchestrator-v3 Slice 6 — the economic layer — in projects/orchestrator-v3/.",
         ["budget cap + kill-switch reachable three ways and honoured mid-batch — drilled by test",
