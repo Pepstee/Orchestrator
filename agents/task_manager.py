@@ -64,8 +64,15 @@ def build_prompt(goal: str, acceptance: list[str] | None = None, state: dict | N
     if done:
         parts.append("Steps already completed:\n" + "\n".join(f"- {t}" for t in done[:40]))
     if failed:
-        parts.append("Steps that FAILED — fix these FIRST:\n"
-                     + "\n".join((f"- {f.get('title', '')}: {f.get('cause', '')}")[:200] for f in failed[:20]))
+        # Give the CAUSE its own budget on its own line. The old `(f"- {title}: {cause}")[:200]`
+        # truncated the whole string title-first, and a validate task titled "Independently review:
+        # <the entire goal>" ate the 200 chars — so the actionable judge finding was chopped off and
+        # the planner, blind to what actually failed, kept planning another 'validate' (the measure-loop).
+        parts.append(
+            "Steps that FAILED — fix these FIRST. For EACH, plan an 'implement' step that fixes the "
+            "CAUSE shown below; do NOT answer a failure with another 'validate' step:\n"
+            + "\n".join(f"- {f.get('title', '')[:80]}\n    cause: {f.get('cause', '')[:600]}"
+                        for f in failed[:20]))
     if mode == "improve":
         parts.append(_IMPROVE_INSTRUCTION)
         return "\n\n".join(parts)
