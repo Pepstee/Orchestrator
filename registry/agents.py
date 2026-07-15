@@ -45,36 +45,36 @@ AGENT_MODELS: dict[str, dict[str, str]] = {
     "builder":      {"provider": "claude", "model": "sonnet"},   # cascades local->sonnet->opus by difficulty
     "tester":       {"provider": "claude", "model": "sonnet"},   # independent test-author (mutation gate backs it)
     "judge":        {"provider": "openai", "model": "codex"},    # cross-provider independence (F5)
-    # Overseer promoted Opus 4.8 -> Fable 5 (operator decision, 9 Jun 2026; DG-3: strongest model
-    # to the highest-stakes judgement role first). Metric to watch per DG-3: retries-per-completion
-    # and tokens-per-certified-criterion — the premium must pay for itself in fewer attempts.
-    # If the host CLI rejects the model string, the failure is PERMANENT (loud) and the env
-    # override AGENTIC_OVERSEER="claude:opus" reroutes it without a code change.
-    "overseer":     {"provider": "claude", "model": "claude-fable-5"},
+    # Overseer EXEC = Sol (Codex GPT-5.6). Operator decision 15 Jul 2026: Fable moved to metered
+    # after its promo window, so routine hourly pulses run on Sol's flat, INDEPENDENT plan — off the
+    # Claude weekly limit entirely — with Opus 4.8 as the same-tier cross-provider deputy (below).
+    # The `openai` path runs `codex exec`, which ignores the model string, so "gpt-5.6-sol" is a
+    # label: point the codex login at GPT-5.6 Sol. Fable is NO LONGER routine — it is invokeable
+    # only in extreme cases and only with human approval (the Fable-escalation path). Env override
+    # AGENTIC_OVERSEER="provider:model" still pins one model and disables the ladder.
+    "overseer":     {"provider": "openai", "model": "gpt-5.6-sol"},
     # Deep-research synthesis. Promotes to Fable 5 AFTER the Overseer eval (locked order: Overseer
     # first, DV-4); runs on sonnet until then. Its adversarial verification stays cross-provider.
     "researcher":   {"provider": "claude", "model": "sonnet"},
 }
 
-# Ordered per-agent MODEL-FALLBACK ladders (resilience: the overseer must not go dark when Fable's
-# quota is exhausted while other Claude models are still up). On a provider RateLimited failure the
-# caller steps DOWN this ladder and retries on the next rung; only a fully-exhausted ladder backs
-# off (requeue behaviour is unchanged). Rung 0 is the AGENT_MODELS primary.
+# Ordered per-agent MODEL-FALLBACK ladders (resilience: the overseer must not go dark when its exec
+# model is unavailable). On a provider fault the caller steps DOWN this ladder and retries on the
+# next rung; only a fully-exhausted ladder backs off (requeue behaviour is unchanged). Rung 0 is the
+# AGENT_MODELS primary; every pulse restarts at rung 0, so it auto-returns when the exec recovers.
 #
-# Overseer: Fable 5 (primary) -> Opus 4.8. This SELF-CLASSIFIES a limit type the CLI never
-# distinguishes for us (every limit surfaces as an opaque `usage/rate limit` or a bare non-zero
-# exit — verified across the whole event log): a Fable-ONLY limit leaves Opus available, so the
-# pulse lands on Opus (the "downgrade Fable->Opus on the Fable limit" behaviour); a 5-hour or
-# weekly ALL-models limit blocks Opus too, so the ladder is exhausted and the pulse backs off and
-# retries after the reset. Because every pulse restarts at Fable, it auto-returns the instant the
-# Fable limit resets — no lock-in.
+# Overseer: Sol (exec, Codex GPT-5.6) -> Opus 4.8 (deputy). Sol runs routine pulses on its flat,
+# INDEPENDENT plan (off the Claude weekly limit); Opus is the same-tier cross-provider deputy, so two
+# independent opinions stay in the loop. Sol has been the LEAST-reliable provider in this env
+# (rate-limits + bare exits), so for the overseer the ladder steps down on ANY provider error, not
+# just rate-limits (see call_llm_ladder `step_on` + PROVIDER_FALLBACK_ERRORS): a Sol wedge/error is
+# silently caught by Opus, and it returns to Sol the next pulse Sol answers.
 #
-# Sol is deliberately NOT a fallback rung: it runs as a separate, lower-cadence, independent
-# cross-provider SECOND OPINION on the overseer's judgement (see agents.overseer second-opinion
-# pass), not as a failover executive.
+# Fable is NOT a routine rung: it is invokeable only in extreme cases and only with human approval
+# (the Fable-escalation path), never automatically.
 AGENT_FALLBACKS: dict[str, list[dict[str, str]]] = {
     "overseer": [
-        {"provider": "claude", "model": "opus"},   # same-account catch for a Fable-only limit
+        {"provider": "claude", "model": "opus"},   # cross-provider deputy for a flaky/absent Sol
     ],
 }
 

@@ -221,28 +221,36 @@ def call_llm(
     raise ValueError(f"unknown provider {provider!r}")
 
 
+# For a MAIN model known to be flaky (e.g. the overseer's Sol exec), the ladder should fall over to
+# the deputy on ANY provider fault, not only rate-limits: a wedge (TimeoutExpired), a bare exit or an
+# auth glitch (RuntimeError, incl. RateLimited which subclasses it) must all be caught so the deputy
+# silently covers. A programming error (ValueError: unknown provider) is deliberately NOT here — it
+# must surface loudly rather than be masked by a fallback.
+PROVIDER_FALLBACK_ERRORS: tuple[type[BaseException], ...] = (RuntimeError, subprocess.TimeoutExpired)
+
+
 def call_llm_ladder(
     specs: list[dict[str, str]],
     prompt: str,
     *,
     call: Callable[..., LLMResult] = call_llm,
+    step_on: tuple[type[BaseException], ...] = (RateLimited,),
     **kwargs,
 ) -> tuple[LLMResult, int]:
-    """Try each {'provider','model'} spec in ``specs`` in order. On a RateLimited failure, step DOWN
-    to the next rung; return ``(result, rung_index)`` for the FIRST rung that answers. Only when
-    EVERY rung is rate-limited does the last RateLimited propagate (the caller then requeues/backs
-    off exactly as before — one taxonomy, L1). A NON-RateLimited error (auth, hard CLI, unknown
-    provider) propagates IMMEDIATELY from the rung that raised it: it is deterministic for that rung,
-    and silently stepping past it would mask a real fault. ``call`` is injected for testability and
-    so the caller's provider/session wiring is reused unchanged. An empty ladder is a programming
-    error."""
+    """Try each {'provider','model'} spec in ``specs`` in order. On an exception in ``step_on``, step
+    DOWN to the next rung; return ``(result, rung_index)`` for the FIRST rung that answers. Only when
+    EVERY rung raises does the last exception propagate (the caller then requeues/backs off exactly as
+    before — one taxonomy, L1). ``step_on`` defaults to just RateLimited (conservative: deterministic
+    faults surface); a caller with a flaky primary passes a wider set (PROVIDER_FALLBACK_ERRORS) so
+    the deputy catches wedges/errors too. Anything NOT in ``step_on`` propagates immediately from the
+    rung that raised it. ``call`` is injected for testability. An empty ladder is a programming error."""
     if not specs:
         raise ValueError("call_llm_ladder: empty model ladder")
-    last: RateLimited | None = None
+    last: BaseException | None = None
     for i, spec in enumerate(specs):
         try:
             return call(spec["provider"], spec["model"], prompt, **kwargs), i
-        except RateLimited as exc:
+        except step_on as exc:
             last = exc
-    assert last is not None   # non-empty ladder with no return means every rung raised RateLimited
+    assert last is not None   # non-empty ladder with no return means every rung raised
     raise last

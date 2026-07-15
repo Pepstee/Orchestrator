@@ -228,3 +228,25 @@ def test_ladder_does_not_swallow_non_rate_limit_errors():
 def test_ladder_empty_is_a_programming_error():
     with pytest.raises(ValueError):
         call_llm_ladder([], "hi")
+
+
+
+def test_ladder_step_on_broadens_which_errors_fall_through():
+    from infra.llm import PROVIDER_FALLBACK_ERRORS
+
+    def call(provider, model, prompt, **kw):
+        call.seen.append(model)
+        if model == "sol":
+            raise RuntimeError("codex wedged")           # NOT a RateLimited
+        return LLMResult(text="deputy", cost_usd=0.0, model=model)
+    call.seen = []
+
+    ladder = [{"provider": "openai", "model": "sol"}, {"provider": "claude", "model": "opus"}]
+    # default step_on=(RateLimited,) -> a bare RuntimeError propagates; the deputy is never tried
+    with pytest.raises(RuntimeError):
+        call_llm_ladder(ladder, "hi", call=call)
+    assert call.seen == ["sol"]
+    # broadened step_on -> the RuntimeError steps down to the deputy
+    call.seen = []
+    res, rung = call_llm_ladder(ladder, "hi", call=call, step_on=PROVIDER_FALLBACK_ERRORS)
+    assert rung == 1 and res.text == "deputy" and call.seen == ["sol", "opus"]

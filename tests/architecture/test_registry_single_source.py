@@ -34,15 +34,15 @@ def test_env_override_reroutes_an_agent_reversibly(monkeypatch):
     assert reg.model_for("judge") == reg.AGENT_MODELS["judge"]   # default restored (still cross-provider)
 
 
-def test_overseer_ladder_is_fable_then_opus():
+def test_overseer_ladder_is_sol_then_opus():
     ladder = reg.model_ladder("overseer")
-    assert [r["provider"] for r in ladder] == ["claude", "claude"]
-    assert ladder[0] == reg.AGENT_MODELS["overseer"]        # rung 0 is the canonical primary (Fable)
-    assert ladder[1]["model"] == "opus"                     # same-account fallback
+    assert ladder[0] == reg.AGENT_MODELS["overseer"]        # rung 0 = exec = Sol
+    assert ladder[0]["provider"] == "openai"                # cross-provider from the deputy
+    assert ladder[1] == {"provider": "claude", "model": "opus"}   # cross-provider deputy
 
 
 def test_model_ladder_pin_disables_fallback(monkeypatch):
     monkeypatch.setenv("AGENTIC_OVERSEER", "claude:opus")
     assert reg.model_ladder("overseer") == [{"provider": "claude", "model": "opus"}]
     monkeypatch.delenv("AGENTIC_OVERSEER")
-    assert len(reg.model_ladder("overseer")) == 2           # ladder restored (Fable -> Opus)
+    assert len(reg.model_ladder("overseer")) == 2           # ladder restored (Sol -> Opus)

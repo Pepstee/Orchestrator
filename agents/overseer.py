@@ -28,7 +28,7 @@ from typing import Callable
 from agents.common import safe_main
 from core.models import AgentResult, Task
 from infra.atomic_io import write_text_atomic
-from infra.llm import LLMResult, call_llm, call_llm_ladder
+from infra.llm import LLMResult, PROVIDER_FALLBACK_ERRORS, call_llm, call_llm_ladder
 from infra.notify import notify
 from infra.workspace import task_workdir
 from memory.overseer import (
@@ -162,6 +162,7 @@ def _run_intervene(task: Task, call: LLMCall, projects_root: str | None,
     project_dir = task_workdir(task, projects_root)   # its worktree if isolated, else the project tree
     try:
         res, rung = call_llm_ladder(ladder, build_prompt(instruction, context), call=call,
+                                    step_on=PROVIDER_FALLBACK_ERRORS,
                                     system=frame_system(SYSTEM_PROMPT), cwd=str(project_dir))
     except Exception as exc:
         return AgentResult(ok=False, summary="overseer call failed", cause=f"{type(exc).__name__}: {exc}")
@@ -264,7 +265,7 @@ def _run_observe(task: Task, call: LLMCall, mind: Path | None = None) -> AgentRe
           "single JSON object (journal required)."
     )
     try:
-        res, rung = call_llm_ladder(ladder, prompt, call=call,
+        res, rung = call_llm_ladder(ladder, prompt, call=call, step_on=PROVIDER_FALLBACK_ERRORS,
                                     system=frame_system(OBSERVE_SYSTEM), **_session_args(task))
     except Exception as exc:
         # Even a failed pulse leaves a trace — the thread of thought must have no silent gaps.
@@ -320,7 +321,7 @@ def _run_operator_message(task: Task, call: LLMCall, mind: Path | None = None,
           "(reply and journal required)."
     )
     try:
-        res, rung = call_llm_ladder(ladder, prompt, call=call,
+        res, rung = call_llm_ladder(ladder, prompt, call=call, step_on=PROVIDER_FALLBACK_ERRORS,
                                     system=frame_system(OPERATOR_CHAT_SYSTEM), **_session_args(task))
     except Exception as exc:
         # He is waiting on a reply that will never come — say so, and leave the trace.
@@ -363,7 +364,8 @@ def _run_succession(task: Task, call: LLMCall, state_root: Path,
         '"improved_extra": "<an improved EXTRA refinements section, or empty to keep the current one>"}'
     )
     try:
-        res, rung = call_llm_ladder(ladder, prompt, call=call, system=frame_system(SUCCESSION_SYSTEM), **_session_args(task))
+        res, rung = call_llm_ladder(ladder, prompt, call=call, step_on=PROVIDER_FALLBACK_ERRORS,
+                                    system=frame_system(SUCCESSION_SYSTEM), **_session_args(task))
     except Exception as exc:
         return AgentResult(ok=False, summary="overseer succession failed", cause=f"{type(exc).__name__}: {exc}")
 
