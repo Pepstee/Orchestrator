@@ -102,11 +102,33 @@ health machine), `watchdog.py` (alert pattern library), `benchmark.py` (Slice 12
 `reasoning_session.py` (multi-turn repair context — candidate for the feedback distiller).
 Nothing else: v1's 26k lines were the argument for v2's 6k.
 
-## The three still-open items (nothing else is uncarried)
+## PENDING AMENDMENT MANIFEST — the single bundle for the next feeder restart
 
-1. Judge variance / consecutive-pass policy (§6) — fold into Slice 11 or 25 criteria.
-2. Skipped-verification-rung-when-provider-down = fail, not pass (§6) — same vehicle.
-3. Goal-compression planner contract (§8) — Slice 11 eval or Slice 13 criterion.
+*Harvested 16 Jul from this analysis + `orchestrator-v2-planning/V3_CARRYFORWARD_FROM_V2.md`
+(a self-declared provisional staging file — its four novel items are absorbed below; per its
+own protocol it is now deletable). **Time-sensitive:** slices 8 and 9 feed on the next two
+certifications — this bundle should land before then or those slices plan without it.*
 
-All three ride the next natural feeder restart (v2 freeze honoured — no dedicated window);
-until then the guardian carries them via handoff §8 and its own beliefs.
+| Slice | Amendment | Source |
+|---|---|---|
+| 8 (research) | named cutting-edge sources: peer archives and preprint servers (arXiv-class) are explicit Tier-2 targets; "access to current research papers" is an acceptance-visible capability, not an implementation detail | operator, 16 Jul |
+| 9 (P0) | isolation-loss drill: a failed sandbox/worktree create is loud and gating — the unattended drill INJECTS an isolation failure and asserts it surfaces, never masks (R-102, milestone-gating) | register / carryforward |
+| 9 (P0) | two daemon-loop invariants, drilled: `reclaim ↔ claim` cannot double-run a task (single-claim); `feeder ↔ monitor` cannot double-feed or skip a slice (single-advance) | carryforward (novel) |
+| 11 (evals) | standing doctrine: **no metric may ever reward weakening verification to look cheaper** (the C-002 principle, encoded not just as the measure-loop metric); skipped verification rung when its provider is unhealthy = FAILED rung, never a silent pass; judge-variance policy (consecutive-pass for contested verdicts); criteria-sanity rubric (the 12 Jul criteria-poisoning spiral) | register + §6/§8 |
+| 13 (graph) | goal-compression contract: a multi-part injected goal is planned whole or explicitly split — proven by test (overseer package item 4) | §8 |
+| 17 (metrics) | plans-per-certification threshold is empirically calibrated (measured at Slice 8), never a guessed constant | carryforward / C-004a |
+
+Note on the carryforward's Slice-4 mappings (R-101/R-103 → slice 4): slice 4 is already
+certified — retroactive criteria are moot; the invariants are carried by the Slice-9 drill and
+the container layer (18) instead, with `repro_worktree_orphan.py` as the inheritance detector.
+
+## EXTENSION PROTOCOL — how future excavation enters the programme (this doc stays open)
+
+1. Finding → **register** (v1-archive `docs/RISK_REGISTER.md`), status per lifecycle; claims
+   need an executable repro or measurement before carrying.
+2. Register → an appendix row **here** (this document is the v2→v3 knowledge ledger).
+3. Here → **feeder slice criteria** at the next natural restart (the feeder table is the only
+   executable truth; planning docs narrate, never duplicate it).
+4. Every carried defect ships an **inheritance detector** (a repro script exit-coded against
+   the v3 implementation) — v3 is proven to not inherit, never assumed.
+5. Staging files (like the carryforward) are deleted once harvested — one source of truth.

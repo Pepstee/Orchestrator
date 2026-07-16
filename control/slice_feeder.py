@@ -102,6 +102,7 @@ SLICES: dict[int, tuple[str, list[str]]] = {
         ["a Tier-1-only, link-dump, uncorroborated, or paywalled bundle FAILS the research gate — "
          "one test per refusal class",
          "research findings land as KB entries (composes with Slice 7)",
+         "cutting-edge access is acceptance-visible: peer archives and preprint servers (arXiv-class) are named Tier-2 targets — a research task retrieves and cites a current paper, proven by an executable criterion",
          "research runs under the Slice 6 budgets",
          "ruff + pytest + lint-imports green"]),
     9: ("Build orchestrator-v3 Slice 9 — overseer, daemon, and supervisor — in "
@@ -114,6 +115,8 @@ SLICES: dict[int, tuple[str, list[str]]] = {
          "pulse economics (cost-audit C-001): the overseer pulse fires only when the ledger has moved (delta >= 5 non-overseer events) or a succession is due; quiet windows skip deterministically with a journalled 'pulse deferred' line and the liveness heartbeat still ticking — proven by a test that freezes the ledger and asserts zero LLM calls",
          "P0 drill: one real sample project driven end-to-end through all four gates unattended; a "
          "forced kill -9 mid-task resumes from step; kill-switch and budget cap halt spend",
+         "isolation-loss drill (R-102, milestone-gating): a failed sandbox/worktree create is LOUD and gating — the unattended drill INJECTS an isolation failure and asserts the system surfaces it, never masks it or runs ungated (verify with the v1-archive repro_worktree_orphan.py inheritance detector)",
+         "two daemon-loop invariants drilled: reclaim/claim cannot double-run a task (single-claim under restart); feeder/monitor cannot double-feed or skip a slice (single-advance)",
          "ruff + pytest + lint-imports green"]),
     10: ("Build orchestrator-v3 Slice 10 — remote control and GUI — in projects/orchestrator-v3/.",
          ["a token-authed GUI shows health, projects, and a NEEDS-YOU tray",
@@ -133,6 +136,10 @@ SLICES: dict[int, tuple[str, list[str]]] = {
           "evals is refused promotion (the ME-5 hook)",
           "execution-shaped validation enforced: a validate task whose instructions forbid "
           "execution FAILS the gate (the 12 Jul review-only gaming class, closed by test)",
+          "standing doctrine: no metric may ever reward weakening verification to look cheaper (C-002: 99/101 supposedly-wasteful failures were genuine findings)",
+          "a skipped verification rung (provider unhealthy) is a FAILED rung, never a silent pass",
+          "judge-variance policy: a contested verdict (FAIL then PASS on an unchanged artefact) requires a consecutive confirming pass; the first FAIL is signal",
+          "criteria-sanity: replan-generated acceptance criteria are checked for satisfiability drift (the 12 Jul criteria-poisoning spiral)",
           "ruff + pytest + lint-imports green"]),
     12: ("Build orchestrator-v3 Slice 12 — eval-driven model routing — in projects/orchestrator-v3/. "
          "Port v1's benchmark harness (docs/planning/port/v1); routing is earned by receipts.",
@@ -157,6 +164,7 @@ SLICES: dict[int, tuple[str, list[str]]] = {
           "graph excerpts enter prompts budget-capped and as quoted DATA, never instructions "
           "(context minimalism + the injection posture)",
           "plan context carries the CURRENT era's goal, never an inherited stale title: a rescope-era replan is proven by test to reference the live goal text, not the first plan task's title (the stale-Slice-1-title defect)",
+          "goal-compression contract: a multi-part injected goal is planned whole or explicitly split into tracked parts — never silently narrowed (overseer package item 4), proven by test",
           "ruff + pytest + lint-imports green"]),
     14: ("Build orchestrator-v3 Slice 14 — the feedback distiller (the operator's taste becomes "
          "regression tests) — in projects/orchestrator-v3/.",
@@ -195,6 +203,7 @@ SLICES: dict[int, tuple[str, list[str]]] = {
           "event counted: confirms, vetoes, Telegram directives, manual requeues)",
           "window-cost per project derives from focus_changed events and per-call usage rows",
           "both metrics render in the GUI and the briefing; the eval store trends alongside",
+          "plans-per-certification thresholds are empirically calibrated from the ledger, never guessed (the C-004a falsification)",
           "waste metrics distinguish REPETITION (the same failure cause recurring past the retry budget with no intervening fix) from genuine verification failures; raw fail-rate is explicitly NOT a waste metric (cost-audit C-002, metric falsified 16 Jul)",
           "a cost-attribution evaluator joins spend to tasks and locks the measure-loop metric with exit codes (port of the v1-archive scripts/cost_attribution.py)",
           "ruff + pytest + lint-imports green"]),
