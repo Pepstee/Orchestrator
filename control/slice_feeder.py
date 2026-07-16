@@ -111,6 +111,7 @@ SLICES: dict[int, tuple[str, list[str]]] = {
          "a supervised run-forever loop honours a repo-root STOP; a deterministic boot refusal "
          "(self-test red) stays down instead of relaunch-looping",
          "DV-7 dev-mode sentinel: state/DEVMODE whitelists operator edits and disables auto-apply",
+         "pulse economics (cost-audit C-001): the overseer pulse fires only when the ledger has moved (delta >= 5 non-overseer events) or a succession is due; quiet windows skip deterministically with a journalled 'pulse deferred' line and the liveness heartbeat still ticking — proven by a test that freezes the ledger and asserts zero LLM calls",
          "P0 drill: one real sample project driven end-to-end through all four gates unattended; a "
          "forced kill -9 mid-task resumes from step; kill-switch and budget cap halt spend",
          "ruff + pytest + lint-imports green"]),
@@ -155,6 +156,7 @@ SLICES: dict[int, tuple[str, list[str]]] = {
           "disables the graph and asserts planning refuses",
           "graph excerpts enter prompts budget-capped and as quoted DATA, never instructions "
           "(context minimalism + the injection posture)",
+          "plan context carries the CURRENT era's goal, never an inherited stale title: a rescope-era replan is proven by test to reference the live goal text, not the first plan task's title (the stale-Slice-1-title defect)",
           "ruff + pytest + lint-imports green"]),
     14: ("Build orchestrator-v3 Slice 14 — the feedback distiller (the operator's taste becomes "
          "regression tests) — in projects/orchestrator-v3/.",
@@ -185,6 +187,7 @@ SLICES: dict[int, tuple[str, list[str]]] = {
           "suggested actions — delivered via notify and the GUI",
           "suggested actions execute one-tap through EXISTING channels (confirm/inbox/focus) — "
           "an architecture test proves the briefing surface cannot bypass a law",
+          "notification honesty: plain-speech alerts are fact-checked against the live ledger before send — an alert may never prescribe action contradicting current state, render a law id as a project name, or reassure during an active starvation; proven by tests over the three documented failure transcripts",
           "ruff + pytest + lint-imports green"]),
     17: ("Build orchestrator-v3 Slice 17 — leverage metrics (measure the thesis) — in "
          "projects/orchestrator-v3/.",
@@ -192,6 +195,8 @@ SLICES: dict[int, tuple[str, list[str]]] = {
           "event counted: confirms, vetoes, Telegram directives, manual requeues)",
           "window-cost per project derives from focus_changed events and per-call usage rows",
           "both metrics render in the GUI and the briefing; the eval store trends alongside",
+          "waste metrics distinguish REPETITION (the same failure cause recurring past the retry budget with no intervening fix) from genuine verification failures; raw fail-rate is explicitly NOT a waste metric (cost-audit C-002, metric falsified 16 Jul)",
+          "a cost-attribution evaluator joins spend to tasks and locks the measure-loop metric with exit codes (port of the v1-archive scripts/cost_attribution.py)",
           "ruff + pytest + lint-imports green"]),
     # ── 17-20: the ratified ME infrastructure (planning/17 §5-§7) — bucket one ────────────
     18: ("Build orchestrator-v3 Slice 18 — the container runner (ME-4) — in "

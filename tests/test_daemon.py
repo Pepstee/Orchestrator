@@ -108,3 +108,61 @@ def test_overseer_intervention_cap_is_env_tunable(monkeypatch):
     monkeypatch.delenv("AGENTIC_MAX_OVERSEER_INTERVENTIONS")
     importlib.reload(daemon_module)
     assert daemon_module.MAX_OVERSEER_INTERVENTIONS == 3
+
+
+def test_quiet_gate_defers_pulses_but_never_three_in_a_row(tmp_path, monkeypatch):
+    # Cost-audit C-001: a frozen ledger defers the observe (journalled, heartbeat ticking);
+    # the third interval fires regardless, so the guardian never goes silent for >3 intervals.
+    from control.daemon import tick_overseer_session
+    from dispatch.repository import TaskRepository
+    from infra.event_store import EventStore
+    from memory.overseer import start_session
+
+    repo = TaskRepository(EventStore(tmp_path / "e.log"))
+    (tmp_path / "tasks.events.log").write_text("x" * 1000, encoding="utf-8")
+    session_path = tmp_path / "overseer_session.json"
+    handoff = tmp_path / "handoff_latest.md"
+    start_session(session_path, now=1000.0)
+    meta: dict = {"last_pulse": 1000.0, "pulse_log_size": 1000}
+
+    def oversee_count():
+        return len([t for t in repo.list() if t.task_type == "oversee"])
+
+    tick_overseer_session(repo, session_path, handoff, meta, now=1000.0 + 3601, pulse_interval=3600)
+    assert oversee_count() == 0 and meta["quiet_skips"] == 1, "first quiet interval defers"
+    tick_overseer_session(repo, session_path, handoff, meta, now=1000.0 + 7202, pulse_interval=3600)
+    assert oversee_count() == 0 and meta["quiet_skips"] == 2, "second quiet interval defers"
+    tick_overseer_session(repo, session_path, handoff, meta, now=1000.0 + 10803, pulse_interval=3600)
+    assert oversee_count() == 1, "third interval fires even on a quiet ledger"
+    assert meta["quiet_skips"] == 0
+    journal = tmp_path / "overseer" / "journal.jsonl"
+    assert journal.exists() and journal.read_text().count('"mode": "deferred"') == 2
+
+
+def test_moving_ledger_never_defers(tmp_path):
+    from control.daemon import tick_overseer_session
+    from dispatch.repository import TaskRepository
+    from infra.event_store import EventStore
+    from memory.overseer import start_session
+
+    repo = TaskRepository(EventStore(tmp_path / "e.log"))
+    log = tmp_path / "tasks.events.log"
+    log.write_text("x" * 1000, encoding="utf-8")
+    session_path = tmp_path / "overseer_session.json"
+    start_session(session_path, now=1000.0)
+    meta: dict = {"last_pulse": 1000.0, "pulse_log_size": 100}   # ledger grew 900B since
+    tick_overseer_session(repo, session_path, tmp_path / "h.md", meta,
+                          now=1000.0 + 3601, pulse_interval=3600)
+    assert len([t for t in repo.list() if t.task_type == "oversee"]) == 1
+
+
+def test_rate_limit_backoff_escalates_and_resets():
+    from control.loop import ExponentialBackoff
+    slept = []
+    b = ExponentialBackoff(base=300, cap=1800, sleep=slept.append)
+    b(); b(); b(); b()
+    assert slept == [300, 600, 1200, 1800]
+    b()
+    assert slept[-1] == 1800, "capped"
+    b.reset(); b()
+    assert slept[-1] == 300, "reset restores the base"

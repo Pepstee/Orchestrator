@@ -18,7 +18,7 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed
 from typing import Callable
 
 from control.budget import BudgetGovernor
-from control.loop import RATE_LIMIT_BACKOFF_SECONDS
+from control.loop import ExponentialBackoff
 from core.models import AgentResult, Task
 from dispatch.dispatcher import Invoke, PAConsult, is_rate_limited, is_transient, settle
 from dispatch.repository import TaskRepository
@@ -33,6 +33,9 @@ from infra.worktree import (
 )
 
 DEFAULT_MAX_WORKERS = 8
+# Shared across batches so consecutive rate-limited batches escalate the pause (C-003) and any
+# clean batch resets it. Tests inject their own `backoff`, so this only governs production runs.
+_RATE_LIMIT_BACKOFF = ExponentialBackoff()
 # Task types that edit a project tree -> run in an isolated worktree. Reserved (__) projects (the
 # overseer's own observe/succession) and read-only types (plan/validate) need no worktree.
 _WORKTREE_TYPES = {"implement", "test", "oversee"}
@@ -116,7 +119,7 @@ def run_concurrent(
     picked up by the very next claim, so new cycles start without waiting for all projects to finish.
 
     On a rate limit, finish what's in flight, back off, and end the batch. Returns the completions count."""
-    backoff = backoff if backoff is not None else (lambda: time.sleep(RATE_LIMIT_BACKOFF_SECONDS))
+    backoff = backoff if backoff is not None else _RATE_LIMIT_BACKOFF
     root = projects_root or str(default_projects_root())
     processed = 0
     rate_limited = False
@@ -157,4 +160,6 @@ def run_concurrent(
             processed += 1
     if rate_limited:
         backoff()
+    elif processed and backoff is _RATE_LIMIT_BACKOFF:
+        _RATE_LIMIT_BACKOFF.reset()   # a clean batch means the window recovered (C-003)
     return processed

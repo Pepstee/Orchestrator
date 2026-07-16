@@ -327,6 +327,32 @@ def tick_overseer_session(
         return
 
     if now - meta.get("last_pulse", 0.0) >= pulse_interval:
+        # Quiet-gate (cost-audit C-001): observation was 44% of all spend, and >=7 pulses
+        # reasoned at full price over a ledger that had not moved. Skip the observe when the
+        # ledger is quiet — deterministically, with a journalled marker, at most twice in a row
+        # (so the guardian still thinks at least every ~3h and BG-5 liveness semantics hold).
+        # Operator messages and successions are untouched (separate paths above/below).
+        try:
+            log_size = (session_path.parent / "tasks.events.log").stat().st_size
+        except OSError:
+            log_size = None
+        prev = meta.get("pulse_log_size")
+        quiet = (log_size is not None and prev is not None
+                 and log_size - prev < 500 and meta.get("quiet_skips", 0) < 2)
+        if quiet:
+            meta["quiet_skips"] = meta.get("quiet_skips", 0) + 1
+            meta["last_pulse"] = now
+            try:
+                from infra.atomic_io import append_jsonl
+                append_jsonl(session_path.parent / "overseer" / "journal.jsonl",
+                             {"mode": "deferred", "note": "pulse deferred: quiet ledger "
+                              f"(delta<{500}B, skip {meta['quiet_skips']}/2)", "ts": now})
+            except Exception:
+                pass  # the marker is best-effort; the skip itself must never fail the cycle
+            return
+        meta["quiet_skips"] = 0
+        if log_size is not None:
+            meta["pulse_log_size"] = log_size
         _enqueue_meta(repo, "observe", session.session_id, resume=True, context=_status_summary(repo))
         meta["last_pulse"] = now
 

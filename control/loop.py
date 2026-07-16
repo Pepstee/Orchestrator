@@ -14,10 +14,31 @@ from control.budget import BudgetGovernor
 from dispatch.dispatcher import Invoke, PAConsult, is_rate_limited, run_one
 from dispatch.repository import TaskRepository
 
-# When a provider usage/rate limit is hit, pause this long before ending the batch (the daemon then
-# retries on its next cycle). Sized for the Claude Max window: long enough not to hammer a limited
-# API, short enough to resume promptly once it resets.
+# When a provider usage/rate limit is hit, pause before ending the batch (the daemon then retries
+# on its next cycle). Sized for the Claude Max window: long enough not to hammer a limited API,
+# short enough to resume promptly once it resets.
 RATE_LIMIT_BACKOFF_SECONDS = 300
+# Cost-audit C-003 (16 Jul): a FLAT backoff kept re-billing full context through dead quota
+# windows — refused calls still cost real money ($0.3–$11 each in cache re-creation). Consecutive
+# rate-limited batches now double the pause up to this cap; any non-rate-limited batch resets it.
+RATE_LIMIT_BACKOFF_CAP_SECONDS = 1800
+
+
+class ExponentialBackoff:
+    """Doubling sleep for consecutive rate-limit batches; reset() on recovery. Injectable sleep."""
+
+    def __init__(self, base: float = RATE_LIMIT_BACKOFF_SECONDS,
+                 cap: float = RATE_LIMIT_BACKOFF_CAP_SECONDS,
+                 sleep: Callable[[float], None] = time.sleep) -> None:
+        self.base, self.cap, self._sleep = float(base), float(cap), sleep
+        self.current = float(base)
+
+    def __call__(self) -> None:
+        self._sleep(self.current)
+        self.current = min(self.current * 2, self.cap)
+
+    def reset(self) -> None:
+        self.current = self.base
 
 
 def run(

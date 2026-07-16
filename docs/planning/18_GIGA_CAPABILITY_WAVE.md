@@ -83,6 +83,14 @@ self-improvement survivable) · 21 resurrection drill (ME-6/DG-8: guardian raisa
 Slice 15 (personal corpus) was amended in place: the injection drill applies from day one
 (a poisoned note must never steer a plan) — safety lands with the surface, not after it.
 
+**Cost-audit inputs, 16 Jul** (register: v1-archive `docs/RISK_REGISTER.md` C-001..C-005;
+evaluator: v1-archive `scripts/cost_attribution.py`): measured $489/7.6 d — observation 44%,
+failure-burn 24% (since locked out), quiet pulses and flat backoff fixed in v2 code the same
+day. Fed into the programme as: Slice 9 pulse-economics criterion (quiet-gate from birth),
+Slice 13 stale-goal criterion, Slice 15 notification-honesty criterion, Slice 16 waste-metric
+doctrine + attribution-evaluator port. Standing lesson made law: raw fail-rate is not a waste
+metric — repetition past the retry budget is.
+
 Deliberately still unplanned (recorded, not forgotten): semantic/embedding retrieval on top of
 the graph (deferred per N5 until graph+keyword recall measurably fails); write-capable world
 connectors (hands stay human until the injection posture has soaked); voice/mobile surfaces
