@@ -194,30 +194,30 @@ def _ladder_stub(succeed_on):
     return call, seen
 
 
-def test_observe_falls_back_to_opus_when_sol_fails(tmp_path):
-    call, seen = _ladder_stub(("claude", "opus"))
+def test_observe_falls_back_to_terra_when_fable_fails(tmp_path):
+    call, seen = _ladder_stub(("openai", "gpt-5.6-terra"))
     res = run(_meta_payload("observe"), call=call, state_root=str(tmp_path))
-    assert res.ok                                        # Sol down, Opus deputy kept it alive
+    assert res.ok                                        # Fable down, Terra deputy kept it alive
     assert res.metadata["rung"] == 1
-    assert res.metadata["served_by"] == "claude:opus"
-    assert seen[0] == ("openai", "gpt-5.6-sol")          # tried the Sol exec first
+    assert res.metadata["served_by"] == "openai:gpt-5.6-terra"
+    assert seen[0] == ("claude", "claude-fable-5")       # tried the Fable exec first
 
 
 def test_observe_falls_over_to_deputy_on_non_ratelimit_provider_error(tmp_path):
-    # A Sol WEDGE/error (not a clean rate-limit) must still fall to the Opus deputy — the overseer
+    # An exec WEDGE/error (not a clean rate-limit) must still fall to the deputy — the overseer
     # steps on ANY provider fault, so a flaky exec never darks the pulse.
     seen = []
 
     def call(provider, model, prompt, *, system=None, cwd=None, session_id=None, resume=False, **kw):
         seen.append((provider, model))
-        if provider == "openai":
-            raise RuntimeError("codex exited 1 with no recognisable error")
+        if provider == "claude":
+            raise RuntimeError("claude exited 1 with no recognisable error")
         return LLMResult(text='{"journal": "deputy caught it"}', cost_usd=0.0,
                          model=model, session_id=session_id or "")
 
     res = run(_meta_payload("observe"), call=call, state_root=str(tmp_path))
-    assert res.ok and res.metadata["served_by"] == "claude:opus"
-    assert seen[0][0] == "openai"                        # tried Sol, fell to Opus on the error
+    assert res.ok and res.metadata["served_by"] == "openai:gpt-5.6-terra"
+    assert seen[0][0] == "claude"                        # tried Fable, fell to Terra on the error
 
 
 def test_observe_pulse_fails_only_when_every_rung_is_limited(tmp_path):
@@ -230,9 +230,9 @@ def test_observe_pulse_fails_only_when_every_rung_is_limited(tmp_path):
     assert not res.ok and "overseer observe failed" in res.summary
 
 
-def test_observe_stays_on_sol_when_healthy(tmp_path):
-    call, seen = _ladder_stub(("openai", "gpt-5.6-sol"))
+def test_observe_stays_on_fable_when_healthy(tmp_path):
+    call, seen = _ladder_stub(("claude", "claude-fable-5"))
     res = run(_meta_payload("observe"), call=call, state_root=str(tmp_path))
     assert res.ok and res.metadata["rung"] == 0
-    assert res.metadata["served_by"] == "openai:gpt-5.6-sol"
-    assert seen == [("openai", "gpt-5.6-sol")]           # exec answered; never stepped to the deputy
+    assert res.metadata["served_by"] == "claude:claude-fable-5"
+    assert seen == [("claude", "claude-fable-5")]        # exec answered; never stepped to the deputy
