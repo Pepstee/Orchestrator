@@ -45,18 +45,12 @@ AGENT_MODELS: dict[str, dict[str, str]] = {
     "builder":      {"provider": "claude", "model": "sonnet"},   # cascades local->sonnet->opus by difficulty
     "tester":       {"provider": "claude", "model": "sonnet"},   # independent test-author (mutation gate backs it)
     "judge":        {"provider": "openai", "model": "codex"},    # cross-provider independence (F5)
-    # Overseer EXEC = Fable 5 (operator decision 17 Jul 2026: strongest model holds the executive
-    # until Anthropic disables it; deputy = Terra via codex exec, cross-provider so a Claude-wide
-    # limit cannot dark both rungs. PHASE 2, ratified in advance: when Fable is disabled and the
-    # GPT Max plan lands, swap providers across the roles — exec Sol (openai), deputy Opus.)
-    # Prior rationale (15 Jul, superseded): Fable moved to metered
-    # after its promo window, so routine hourly pulses run on Sol's flat, INDEPENDENT plan — off the
-    # Claude weekly limit entirely — with Opus 4.8 as the same-tier cross-provider deputy (below).
-    # The `openai` path runs `codex exec`, which ignores the model string, so "gpt-5.6-sol" is a
-    # label: point the codex login at GPT-5.6 Sol. Fable is NO LONGER routine — it is invokeable
-    # only in extreme cases and only with human approval (the Fable-escalation path). Env override
-    # AGENTIC_OVERSEER="provider:model" still pins one model and disables the ladder.
-    "overseer":     {"provider": "claude", "model": "claude-fable-5"},
+    # Overseer EXEC = Sol via codex (PHASE 2 LIVE, 18 Jul 2026: Fable walled 19 Jul at 92% of a
+    # non-resetting limit; GPT Max plan carries the executive). Deputy = Opus 4.8, cross-provider
+    # so neither provider's outage darks the pulse. The `openai` path runs `codex exec`, which
+    # ignores the model string — the label documents the account's served model (Sol).
+    # Env override AGENTIC_OVERSEER="provider:model" still pins one model and disables the ladder.
+    "overseer":     {"provider": "openai", "model": "gpt-5.6-sol"},
     # Deep-research synthesis. Promotes to Fable 5 AFTER the Overseer eval (locked order: Overseer
     # first, DV-4); runs on sonnet until then. Its adversarial verification stays cross-provider.
     "researcher":   {"provider": "claude", "model": "sonnet"},
@@ -78,7 +72,7 @@ AGENT_MODELS: dict[str, dict[str, str]] = {
 # (the Fable-escalation path), never automatically.
 AGENT_FALLBACKS: dict[str, list[dict[str, str]]] = {
     "overseer": [
-        {"provider": "openai", "model": "gpt-5.6-terra"},   # cross-provider deputy (phase 2: exec Sol, deputy Opus)
+        {"provider": "claude", "model": "opus"},   # cross-provider deputy (phase 2 live: exec Sol, deputy Opus)
     ],
 }
 
