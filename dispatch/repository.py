@@ -171,6 +171,19 @@ class TaskRepository:
                                            "summary": ev.data.get("summary")}
         return out
 
+    def iter_results(self) -> list[dict]:
+        """Every recorded task_result in CHRONOLOGICAL order (task_id, ok, cause). Read-only over
+        the existing event stream — no new event kind, no schema change. Callers that need a task's
+        type/payload join by task_id via `get()` (F-001: criterion carry-forward reads this to find
+        the last unresolved validate finding without collapsing to latest-per-task the way
+        `last_results` does)."""
+        return [
+            {"task_id": ev.data.get("task_id"), "ok": ev.data.get("ok"),
+             "cause": ev.data.get("cause")}
+            for ev in self._store.replay()
+            if ev.kind == "task_result"
+        ]
+
     def failure_causes(self) -> list[str]:
         """Every recorded failure cause (the overseer mines these to evolve the PA)."""
         return [

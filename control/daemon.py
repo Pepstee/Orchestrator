@@ -12,6 +12,7 @@ no auto-restart, so a soft-stop cannot resurrect it.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import signal
@@ -145,6 +146,45 @@ def _project_state(repo: TaskRepository, project: str, root: Path) -> dict:
             "state": {"done": done, "failed": failed, "files": files}}
 
 
+# ---- F-001: criterion carry-forward (a validate finding must be RESOLVED before a project certifies) ----
+# The burial mechanism (memory/tier1-findings.md): a validate fails with a specific finding; a
+# DIFFERENT validate later passes (or an intervene sees green gates and calls it "stale"); the judge
+# gate flips TRUE and the round certifies with the finding still true on disk (2 of 9 real certs were
+# buried). The cure: match on a durable PAYLOAD field, never title text (titles quote history;
+# payloads carry intent), and refuse to certify while the last real validate finding is unaddressed.
+
+def _finding_fingerprint(cause: str) -> str:
+    """A normalised, stable fingerprint of a validate finding. Matching is on THIS, not on prose —
+    so a re-validate proves it addressed finding F by carrying F's fingerprint, not by echoing text."""
+    return hashlib.sha1((cause or "")[:200].encode("utf-8", "replace")).hexdigest()[:12]
+
+
+def unresolved_validate_finding(repo: TaskRepository, project: str) -> str | None:
+    """The project's LAST validate-type task_result with ok=False whose finding is NOT yet resolved,
+    or None. Resolved = a LATER validate-type task_result with ok=True whose task carried a
+    `carry_forward` matching the finding's fingerprint. Read-only over the event ledger (iter_results,
+    chronological) joined by task_id to each task's type + payload — so it survives a restart with NO
+    new event kind. This is the precondition on certification; deleting this predicate (and its two
+    call sites) restores the old behaviour exactly."""
+    finding: str | None = None
+    resolved: set[str] = set()   # fingerprints proven addressed by a later carry-forward validate pass
+    for res in repo.iter_results():
+        task = repo.get(res.get("task_id"))
+        if task is None or task.project != project or task.task_type != "validate":
+            continue
+        if res.get("ok"):
+            carried = task.payload.get("carry_forward") if isinstance(task.payload, dict) else None
+            if carried:
+                resolved.add(_finding_fingerprint(str(carried)))
+            # A validate PASS that carried nothing is the burial case — it addresses no named
+            # finding, so it must not clear an outstanding one. It only clears one it carried.
+        else:
+            finding = res.get("cause") or ""   # a later failure re-opens the question
+    if finding is not None and _finding_fingerprint(finding) not in resolved:
+        return finding
+    return None
+
+
 def _advance_stalled(repo: TaskRepository, project: str, root: Path, *, reason: str, gates: dict) -> None:
     """The planner is spent (or quality is unmet): dispatch the OVERSEER to diagnose and fix (bounded
     by MAX_OVERSEER_INTERVENTIONS), and only once the overseer is also exhausted escalate to the user.
@@ -157,9 +197,15 @@ def _advance_stalled(repo: TaskRepository, project: str, root: Path, *, reason: 
             f"This project is NOT ship-ready — {reason} (gates={gates}). Run the test suite, find why "
             "it falls short, fix the code so the quality bar is met, then it will be re-validated."
         )
+        payload = {"context": json.dumps(st["state"])}
+        finding = unresolved_validate_finding(repo, project)
+        if finding:
+            # F-001: thread the unresolved finding durably so the overseer's re-validate carries it
+            # forward (match on this FIELD, never on title text). cause[:500] per the fix brief.
+            payload["carry_forward"] = finding[:500]
         repo.create(Task(task_id=uuid.uuid4().hex[:12], title=instruction, task_type="oversee",
                          project=project, acceptance_criteria=st["acceptance"],
-                         payload={"context": json.dumps(st["state"])}))   # overseer steps in (L6-bounded)
+                         payload=payload))   # overseer steps in (L6-bounded)
         notify("Orchestrator", f"{project} not ship-ready — overseer stepping in")
     else:
         # Planner AND overseer both exhausted. The operator is NOT in the loop, so we do NOT park this
@@ -213,6 +259,17 @@ def monitor_projects(
             repo.record_assurance(project, fully_hardened=assurance.fully_hardened,
                                   reason=assurance.stopped_reason)
             if assurance.fully_hardened:
+                # F-001: a clean ladder is NOT enough — a certification cannot proceed while the last
+                # real validate finding is unresolved (criterion burial: an unrelated validate passed,
+                # the judge gate flipped TRUE, and the round certified with the finding still on disk).
+                # Route the outstanding finding to the overseer (loud, journalled) instead of certifying.
+                buried = unresolved_validate_finding(repo, project)
+                if buried:
+                    _advance_stalled(
+                        repo, project, root,
+                        reason=f"criterion carry-forward: unresolved finding: {buried[:120]}",
+                        gates=outcome.gates)
+                    continue
                 repo.record_confirmation(project)   # certified at scope — shippable now, no human gate
                 notify("Orchestrator",
                        f"{project} is CERTIFIED — all four gates passed AND the hardening ladder "

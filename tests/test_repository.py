@@ -93,3 +93,21 @@ def test_claim_next_unbounded_cap_allows_many_per_project(tmp_path: Path):
     repo.create(Task(task_id="a2", title="x", task_type="implement", project="alpha"))
     assert repo.claim_next(per_project_cap=0) is not None
     assert repo.claim_next(per_project_cap=0) is not None  # same project, still claimable
+
+
+def test_iter_results_is_chronological_and_read_only(tmp_path: Path):
+    """iter_results yields every task_result in ledger order (F-001 reads this to find the last
+    unresolved validate finding without collapsing to latest-per-task the way last_results does)."""
+    repo = TaskRepository(EventStore(tmp_path / "e.log"))
+    repo.create(_task("t1"))
+    repo.apply("t1", Event.CLAIM)
+    repo.record_result("t1", AgentResult(ok=False, summary="fail", cause="finding one"))
+    repo.apply("t1", Event.REQUEUE)
+    repo.apply("t1", Event.CLAIM)
+    repo.record_result("t1", AgentResult(ok=True, summary="pass"))
+    rows = repo.iter_results()
+    assert [r["ok"] for r in rows] == [False, True]           # both, in order (not collapsed)
+    assert rows[0]["cause"] == "finding one" and rows[0]["task_id"] == "t1"
+    # survives a restart (derived from the durable log)
+    revived = TaskRepository.replay(EventStore(tmp_path / "e.log"))
+    assert [r["ok"] for r in revived.iter_results()] == [False, True]

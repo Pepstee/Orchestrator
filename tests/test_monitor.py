@@ -264,3 +264,106 @@ def test_abandonment_closes_the_era_for_whoever_resurrects(tmp_path: Path):
     # and the watermark survives a restart (replayed from the event log)
     revived = TaskRepository.replay(EventStore(tmp_path / "e.log"))
     assert revived.abandon_watermark("demo") == 29
+
+
+# ---- F-001: criterion carry-forward (a validate finding must be resolved before certification) ----
+# Burial mechanism (memory/tier1-findings.md): a validate fails with a specific finding; a DIFFERENT
+# validate later passes; the judge gate flips TRUE and the round certifies with the finding still on
+# disk. These drive the REAL repo + monitor machinery (no mocking the unit under test); the gate is
+# a read-only precondition derived entirely from the event ledger.
+
+def _validate_finding(repo: TaskRepository, task_id: str, cause: str) -> None:
+    """A validate attempt that FAILED with a specific finding (recorded on the durable ledger)."""
+    from core.models import AgentResult
+    repo.create(Task(task_id=task_id, title="judge", task_type="validate", project="demo"))
+    repo.apply(task_id, Event.CLAIM)
+    repo.record_result(task_id, AgentResult(ok=False, summary="judge failed", cause=cause))
+    repo.apply(task_id, Event.FAIL)
+
+
+def _validate_pass(repo: TaskRepository, task_id: str, *, carry_forward: str | None = None) -> None:
+    """A validate attempt that PASSED. If carry_forward is set, the task durably carries that finding
+    (the honest resolution path); if None, it is an UNRELATED pass (the burial case)."""
+    from core.models import AgentResult
+    payload = {"carry_forward": carry_forward} if carry_forward else {}
+    repo.create(Task(task_id=task_id, title="judge", task_type="validate", project="demo",
+                     payload=payload))
+    repo.apply(task_id, Event.CLAIM)
+    repo.record_result(task_id, AgentResult(ok=True, summary="judge passed"))
+    repo.apply(task_id, Event.COMPLETE)
+
+
+def test_carry_forward_blocks_certification_when_finding_unresolved(tmp_path: Path):
+    """(a) Burial repro: a validate fails with finding C; an UNRELATED validate then passes (so the
+    judge gate flips TRUE and all four gates pass). Certification must be BLOCKED and the finding
+    routed to the overseer — never silently certified with C still true on disk."""
+    C = "directives.py still contains the forbidden char-blacklist at line 42"
+    repo = TaskRepository(EventStore(tmp_path / "e.log"))
+    repo.create(Task(task_id="b", title="build", task_type="implement", project="demo"))
+    repo.apply("b", Event.CLAIM)
+    repo.apply("b", Event.COMPLETE)
+    _validate_finding(repo, "v_fail", C)          # the finding
+    _validate_pass(repo, "v_unrelated")           # an unrelated pass buries it (no carry_forward)
+    _demo_dir(tmp_path)
+    outs = monitor_projects(repo, {}, projects_root=str(tmp_path), test_command=PASS, tiers=OK_TIERS)
+    assert outs and outs[0].complete              # all four automated gates pass (judge superseded)...
+    confirmed = [e for e in EventStore(str(tmp_path / "e.log")).replay()
+                 if e.kind == "project_confirmed"]
+    assert not confirmed                          # ...but certification is BLOCKED (finding unresolved)
+    oversee = [t for t in repo.list() if t.project == "demo" and t.task_type == "oversee"]
+    assert oversee, "the unresolved finding must be routed to the overseer, never silently dropped"
+    assert C[:120] in oversee[-1].title, "the routed reason must NAME the finding (loud, not silent)"
+    # and the overseer's re-validate carries the finding forward on a PAYLOAD field, not title text
+    assert oversee[-1].payload.get("carry_forward", "").startswith(C[:60])
+
+
+def test_carry_forward_lets_certification_proceed_when_finding_resolved(tmp_path: Path):
+    """(b) Honest path: a later validate whose task CARRIES the finding's carry_forward passes —
+    the finding is resolved, so certification proceeds normally."""
+    C = "README claims 1,712 tests but only 2,617 are collected"
+    repo = TaskRepository(EventStore(tmp_path / "e.log"))
+    repo.create(Task(task_id="b", title="build", task_type="implement", project="demo"))
+    repo.apply("b", Event.CLAIM)
+    repo.apply("b", Event.COMPLETE)
+    _validate_finding(repo, "v_fail", C)          # the finding
+    _validate_pass(repo, "v_fixed", carry_forward=C)   # a validate that ADDRESSED it passes
+    _demo_dir(tmp_path)
+    outs = monitor_projects(repo, {}, projects_root=str(tmp_path), test_command=PASS, tiers=OK_TIERS)
+    assert outs and outs[0].complete
+    confirmed = [e.data for e in EventStore(str(tmp_path / "e.log")).replay()
+                 if e.kind == "project_confirmed"]
+    assert confirmed and confirmed[-1]["project"] == "demo"   # resolved -> certification proceeds
+
+
+def test_no_validate_finding_certifies_untouched(tmp_path: Path):
+    """(c) No-finding path: a project with NO validate failures certifies exactly as before — the
+    gate is inert when there is nothing to carry forward."""
+    repo = TaskRepository(EventStore(tmp_path / "e.log"))
+    _finished_project(repo)                       # a clean build + a passing validate, no failures
+    _demo_dir(tmp_path)
+    monitor_projects(repo, {}, projects_root=str(tmp_path), test_command=PASS, tiers=OK_TIERS)
+    confirmed = [e.data for e in EventStore(str(tmp_path / "e.log")).replay()
+                 if e.kind == "project_confirmed"]
+    assert confirmed and confirmed[-1]["project"] == "demo"
+
+
+def test_carry_forward_block_survives_a_restart(tmp_path: Path):
+    """(d) Replay: the block is derived from the event ledger alone, so a restart (replay) reconstructs
+    the SAME unresolved finding — no new event kind is introduced, and the burial stays blocked."""
+    from control.daemon import unresolved_validate_finding
+    C = "acceptance script references a file the build never creates"
+    repo = TaskRepository(EventStore(tmp_path / "e.log"))
+    repo.create(Task(task_id="b", title="build", task_type="implement", project="demo"))
+    repo.apply("b", Event.CLAIM)
+    repo.apply("b", Event.COMPLETE)
+    _validate_finding(repo, "v_fail", C)
+    _validate_pass(repo, "v_unrelated")           # burial: unrelated pass, no carry_forward
+    assert unresolved_validate_finding(repo, "demo") == C   # unresolved before restart
+
+    revived = TaskRepository.replay(EventStore(tmp_path / "e.log"))
+    assert unresolved_validate_finding(revived, "demo") == C   # ...and after (derived from the ledger)
+    # no schema change: replaying introduced no unfamiliar event kinds
+    kinds = {e.kind for e in EventStore(str(tmp_path / "e.log")).replay()}
+    assert kinds <= {"task_created", "task_transition", "task_result", "task_reprioritised",
+                     "project_confirmed", "project_status", "assurance_result", "project_abandoned",
+                     "escalation", "attempt_inputs", "task_cancelled"}

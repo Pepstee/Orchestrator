@@ -236,3 +236,19 @@ def test_observe_stays_on_sol_when_healthy(tmp_path):
     assert res.ok and res.metadata["rung"] == 0
     assert res.metadata["served_by"] == "openai:gpt-5.6-sol"
     assert seen == [("openai", "gpt-5.6-sol")]           # exec answered; never stepped to the deputy
+
+
+def test_overseer_revalidate_carries_the_finding_forward(tmp_path: Path):
+    """F-001: when the daemon threaded an unresolved finding onto the intervene task, the overseer's
+    re-validate must CARRY it forward on the payload (never title text) — so a later pass that clears
+    the finding is the one that lets the project certify."""
+    finding = "config.py still hard-codes the API key at line 12"
+    payload = {"task": {"task_id": "o1", "title": "fix the config", "task_type": "oversee",
+                        "project": "demo", "payload": {"context": "", "carry_forward": finding}}}
+    res = run(payload,
+              call=_stub('Removed the hard-coded key.\n{"action": "removed the key", "revalidate": true}'),
+              projects_root=str(tmp_path), state_root=str(tmp_path))
+    assert res.ok and len(res.spawned_tasks) == 1
+    spawned = res.spawned_tasks[0]
+    assert spawned["task_type"] == "validate"
+    assert spawned["payload"].get("carry_forward") == finding   # threaded on the FIELD, not the title

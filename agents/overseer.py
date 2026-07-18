@@ -173,9 +173,16 @@ def _run_intervene(task: Task, call: LLMCall, projects_root: str | None,
     action = str(directive.get("action") or first_line)
     spawned: list[dict] = []
     if directive.get("revalidate"):
+        # F-001 carry-forward: propagate the finding the daemon threaded onto this intervene task so
+        # the re-validate CARRIES it (payload field, never title text). A validate that passes while
+        # carrying the finding is what clears it — otherwise a certification would bury the finding.
+        payload = {}
+        carried = task.payload.get("carry_forward") if isinstance(task.payload, dict) else None
+        if carried:
+            payload["carry_forward"] = str(carried)[:500]
         spawned.append(Task(task_id=uuid.uuid4().hex[:12],
                             title=f"Re-validate after overseer: {instruction}"[:200],
-                            task_type="validate", project=task.project).to_dict())
+                            task_type="validate", project=task.project, payload=payload).to_dict())
     append_journal(mind or default_mind_dir(),
                    {"mode": "intervene", "project": task.project, "note": action[:500],
                     "rung": rung, "served_by": served})
