@@ -21,3 +21,4 @@ graphify-out/
 projects.archived-*
 pytest-cache-files-*/
 .import_linter_cache/
+.agents/
