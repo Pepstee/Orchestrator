@@ -5,7 +5,7 @@ is the other direction. Each daemon cycle (throttled) it asks Telegram for new m
 (getUpdates, zero-timeout so the cycle never blocks), keeps ONLY messages from the operator's own
 chat_id (sender lock — anyone else's words are dropped unread; an open bot would be a steering
 wheel for the whole fleet), and turns each one into a high-priority `oversee` task that rides the
-SAME persistent session as the hourly pulses — the operator's words become turns inside the one
+SAME persistent session as the periodic pulses — the operator's words become turns inside the one
 continuous mind, not prompts to a stateless wrapper. The overseer replies through notify() in its
 own words (verbatim — no plain-speech rewrite for a direct conversation).
 

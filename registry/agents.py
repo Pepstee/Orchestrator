@@ -41,7 +41,13 @@ AGENT_COMMANDS: dict[str, list[str]] = {
 #   Judge runs on a DIFFERENT PROVIDER from the Builder (true independence, finding F5).
 AGENT_MODELS: dict[str, dict[str, str]] = {
     # role          provider    model tier        notes
-    "task_manager": {"provider": "claude", "model": "sonnet"},   # ->opus for complex goals
+    # Ollama is available for text-only roles through AGENTIC_<AGENT>=ollama:<model>. Roles that
+    # edit files need a tool-capable provider. Current defaults preserve the later operator policy:
+    # Codex provides independent judgement and the Overseer executive, with Claude as deputy.
+    # Planning promoted back to claude (operator decision, 13 Jun 2026; overseer first-pulse
+    # evidence: 7b plans shallow/mistyped - planning is architecture, the doctrine's claude
+    # territory; plans are low-volume, high-leverage).
+    "task_manager": {"provider": "claude", "model": "sonnet"},
     "builder":      {"provider": "claude", "model": "sonnet"},   # cascades local->sonnet->opus by difficulty
     "tester":       {"provider": "claude", "model": "sonnet"},   # independent test-author (mutation gate backs it)
     "judge":        {"provider": "openai", "model": "codex"},    # cross-provider independence (F5)

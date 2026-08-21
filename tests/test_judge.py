@@ -6,6 +6,7 @@ from pathlib import Path
 from agents.judge import parse_verdict, run
 from core.models import Task
 from infra.llm import LLMResult
+from registry.agents import AGENT_MODELS
 
 
 def _payload(project: str = "default") -> dict:
@@ -33,7 +34,7 @@ def test_judge_uses_independent_provider_and_passes(tmp_path: Path):
                          cost_usd=0.01, model=model)
 
     r = run(_payload(), call=fake, projects_root=str(tmp_path))
-    assert seen["provider"] == "openai"          # builder is claude; judge must differ (F5)
+    assert seen["provider"] != AGENT_MODELS["builder"]["provider"]   # judge differs from builder (F5) — the law, not a pinned provider
     assert r.ok and r.metadata["verdict"]["verdict"] == "pass"
 
 

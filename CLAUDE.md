@@ -70,7 +70,7 @@ registry = leaf (imports nothing internal)        selfdev = quarantined (nothing
   overseer, NOT to you (quality blocks completion).
 - **PA (Programmatic Architecture)** — `state/pa_rules.json`: deterministic failure-cause→action
   rules the overseer evolves (curated promotion). The cheap fast-path on the failure ladder.
-- **Overseer** — the persistent meta-agent. Resumes one Claude session (continuity), pulses hourly,
+- **Overseer** — the persistent meta-agent. Resumes one Claude session (continuity), pulses two-hourly,
   resets every 24h with a self-improving handoff, carries an immutable charter, and may
   enqueue / abandon / reprioritise projects (bounded by L6, never touches orchestrator code per L9).
 

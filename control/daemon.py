@@ -27,6 +27,7 @@ from control.confirm import ingest_confirmations
 from control.inbox import ingest
 from control.operator_chat import poll_operator_messages
 from control.pool import DEFAULT_MAX_WORKERS, run_concurrent
+from control.prescreen import prescreen_pulse
 from control.project import DEFAULT_TEST_COMMAND, ProjectOutcome, evaluate_project
 from control.self_test import run_boot_self_test
 from core.models import Event, Task, TaskStatus
@@ -80,7 +81,7 @@ HEARTBEAT_SECONDS = 12 * 3600
 # The persistent Overseer meta-agent. Its observe/succession tasks live under a RESERVED project name
 # so they are never mistaken for a buildable project by monitor_projects. It "thinks" on a pulse.
 OVERSEER_PROJECT = "__overseer__"
-OVERSEER_PULSE_SECONDS = 3600
+OVERSEER_PULSE_SECONDS = 2 * 3600   # two-hourly (operator decision, 12 Jun 2026: Pro-tier budget discipline)
 
 
 def _status_summary(repo: TaskRepository) -> str:
@@ -350,6 +351,7 @@ def tick_overseer_session(
     *,
     now: float | None = None,
     pulse_interval: float = OVERSEER_PULSE_SECONDS,
+    prescreen: Callable[[str], tuple[bool, str]] = prescreen_pulse,
 ) -> None:
     """Drive the persistent Overseer's session on a clock (the meta-agent's heartbeat):
       - on boot / at the reset interval -> start a FRESH session, seed it with the last handoff, and
@@ -410,8 +412,23 @@ def tick_overseer_session(
         meta["quiet_skips"] = 0
         if log_size is not None:
             meta["pulse_log_size"] = log_size
-        _enqueue_meta(repo, "observe", session.session_id, resume=True, context=_status_summary(repo))
+
+        # If deterministic evidence says a pulse is due, let the cheap local model decide whether
+        # the expensive persistent mind needs waking. This is advisory and fails open by contract.
+        ctx = _status_summary(repo)
+        wake, note = prescreen(ctx)
         meta["last_pulse"] = now
+        if not wake:
+            # The saving: a screened-quiet pulse spends nothing. Kept (capped) for continuity.
+            meta["screened_quiet"] = (meta.get("screened_quiet") or [])[-11:] + [note[:160]]
+            return
+        quiet = meta.pop("screened_quiet", [])
+        if quiet:
+            ctx += (f"\n\nScreened-quiet pulses since your last turn ({len(quiet)}): "
+                    + " | ".join(quiet[-6:]))
+        if note:
+            ctx += "\n\nLocal pre-screen note (advisory - verify against the summary):\n" + note
+        _enqueue_meta(repo, "observe", session.session_id, resume=True, context=ctx)
 
 
 def abandon_project(repo: TaskRepository, project: str, *, reason: str) -> int:
