@@ -1,13 +1,18 @@
-# agentic-orchestrator
+# Orchestrator v2 — historical release
+
+> [!IMPORTANT]
+> This repository is the preserved **v2** of an evolving Orchestrator product. It is an old
+> version retained for provenance, comparison and portfolio evidence. It follows v1 and precedes
+> v3, but each major version has a deliberately independent repository and Git history.
+
+## Original v2 documentation
 
 A reliable, observable, GUI-first orchestrator that takes one goal and autonomously drives it
 to completion through a small team of specialised agents — trustworthy enough to leave running
 for days, legible enough to audit every step, and cheaper/more deterministic the longer it runs.
 
-This is the v2 rebuild. The full Phase-0 plan (vision, literature review, architecture, risk
-register, enforcement spec, decisions) lives in
-[`../claude-orchestrator-main/orchestrator-v2-planning/`](../claude-orchestrator-main/orchestrator-v2-planning/) —
-start with `07_PHASE0_SYNTHESIS.md`.
+This is the v2 rebuild. Its design replaced v1's prose-only architectural constraints with
+machine-enforced laws and deterministic gates.
 
 ## Why this exists / the prime directive
 v1 had excellent rules and drifted anyway, because the rules were prose. Here **every
@@ -30,7 +35,7 @@ lint-imports            # import-linter: L2 layering + L9 self-mod quarantine
 pytest tests/           # architecture tests: L1, L3, L5, L11, prime directive
 ```
 
-## Status
-Foundation commit: the enforcement skeleton is green on an empty structure, so every
-subsequent commit is policed from line one. Next: the P0 milestone (see the feature catalogue)
-— one goal, end-to-end, reliably and legibly. No P0 feature lands until this skeleton is green.
+## Historical status
+
+v2 development has ended. The repository is preserved as the completed second-generation
+architecture; subsequent product evolution occurs in the separate v3 line.
