@@ -1,13 +1,9 @@
-"""control.project — the Global Task lifecycle: run a project's graph, then judge completion.
+"""control.project — run a project's graph, then evaluate automated completion.
 
-Drives a project's task graph (build tasks, then a dependency-gated validate task) through the
-budget-bounded run loop, then evaluates the four-gate completion contract:
-  - tests:      the project's own suite passes (run_test_gate)
-  - acceptance: every build task reached DONE (the planned work completed)
-  - judge:      the validate task reached DONE (the independent Judge passed)
-  - user:       your confirmation (always pending here — the Da Nang model: it parks for you)
-A project that passes the first three lands at pending_user — finished but awaiting your one-tap
-confirmation, exactly the two-tier completion model.
+The four gates require executable project tests, declared acceptance against the real
+product, completed independent validation tasks, and an authenticity scan. All four must
+pass for ProjectOutcome.complete. The daemon subsequently runs its assurance ladder and
+records certification; there is no human-confirmation gate in this contract.
 """
 from __future__ import annotations
 
