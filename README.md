@@ -5,6 +5,24 @@
 > version retained for provenance, comparison and portfolio evidence. It follows v1 and precedes
 > v3, but each major version has a deliberately independent repository and Git history.
 
+## ArtVault preservation scope
+
+This historical source is preserved independently from v3. The offline demonstration
+`python3 -B scripts/demo_e2e.py` creates a real small product, runs its tests and executable
+acceptance, and verifies automated certification and replay. Its model boundary and judge
+approval are explicitly synthetic; it does not establish live autonomous factory readiness.
+
+The ArtVault export uses an explicit file manifest. Local settings, operator memory, personal
+context, private evidence, runtime state, nested projects and the Git object database are
+excluded. Historical launch and seed scripts are preserved for reference, not activated.
+Tests of excluded operator documents cannot establish export completeness and are reported
+separately from executable technical checks.
+
+Capability comparison recovered v2 quota backoff into v3. Selective project parking and
+deliberate revival remain preserved in v2; an equivalent operator entrypoint in v3 is still
+missing. V3's per-task budgets replace v2's shared project-era accounting. This migration
+does not restore the historical Overseer's broader authority in v3.
+
 ## Original v2 documentation
 
 A reliable, observable, GUI-first orchestrator that takes one goal and autonomously drives it
