@@ -23,6 +23,18 @@ deliberate revival remain preserved in v2; an equivalent operator entrypoint in 
 missing. V3's per-task budgets replace v2's shared project-era accounting. This migration
 does not restore the historical Overseer's broader authority in v3.
 
+## ArtVault quick-start
+
+Workspace: `/srv/artvault/projects/orchestrator-v2/workspace`. Run the verified offline
+demo from a shell:
+
+```
+cd /srv/artvault/projects/orchestrator-v2/workspace && /srv/artvault/projects/orchestrator-v2/.venv/bin/python -B scripts/demo_e2e.py
+```
+
+The demo uses a synthetic model/judge boundary while exercising real product tests and
+acceptance. The historical live factory is not activated.
+
 ## Original v2 documentation
 
 A reliable, observable, GUI-first orchestrator that takes one goal and autonomously drives it
